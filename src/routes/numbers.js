@@ -5,11 +5,17 @@
 // traceable for monthly P&L disputes.
 
 import express from 'express';
+import multer from 'multer';
 import { requireAuth, requireAdmin } from '../auth/middleware.js';
 import { supabase } from '../supabase.js';
 import { auditLog, diffShallow } from '../util/audit.js';
+import { parseAndAnalyze, commitNumbersImport } from '../services/xlsx_import.js';
 
 export const numbersRouter = express.Router();
+
+// Memory-storage multer: 5MB cap, single field "file". xlsx workbooks
+// are tiny — we never want to spool to disk.
+const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const VALID_TYPES = new Set(['SC', 'VLN']);
 
@@ -174,6 +180,28 @@ numbersRouter.patch('/api/numbers/:id', requireAdmin, async (req, res) => {
     res.json({ ok: true, number: rowShape(updated) });
   } catch (e) {
     res.status(e.code || 500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── POST /api/numbers/import?dryRun=true ────────────────────
+// Multipart upload, single file field "file". dryRun=true returns the
+// preview ({toCreate, toUpdate, feesToCreate, errors}). dryRun=false
+// commits via service layer (which itself re-runs analyze; the parse
+// is the single source of truth for what "commit" actually applies).
+numbersRouter.post('/api/numbers/import', requireAdmin, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: 'file field is required (multipart/form-data)' });
+  const dryRun = String(req.query.dryRun || 'true') !== 'false';
+  try {
+    if (dryRun) {
+      const plan = await parseAndAnalyze(req.file.buffer);
+      return res.json({ ok: true, dryRun: true, ...plan });
+    }
+    const result = await commitNumbersImport(req.file.buffer, req.user.id);
+    if (!result.ok) return res.status(400).json(result);
+    return res.json({ ok: true, dryRun: false, ...result });
+  } catch (err) {
+    console.error('[numbers/import]', err);
+    res.status(500).json({ ok: false, error: err.message });
   }
 });
 
