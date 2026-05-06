@@ -1,0 +1,14 @@
+node_modules/
+.env
+.env.local
+*.log
+logs/
+dist/
+web/dist/
+.DS_Store
+*.swp
+*.swo
+.idea/
+.vscode/
+_bak/
+*.bak
