@@ -10,6 +10,7 @@ import cookieParser from 'cookie-parser';
 import { CONFIG, requireAuthEnv } from './src/config.js';
 import { authRouter } from './src/routes/auth.js';
 import { usersRouter } from './src/routes/users.js';
+import { numbersRouter } from './src/routes/numbers.js';
 import { loadUser } from './src/auth/middleware.js';
 
 requireAuthEnv();
@@ -22,6 +23,8 @@ app.use(cookieParser());
 app.use(authRouter);
 // Users CRUD (admin) + Users page
 app.use(usersRouter);
+// Numbers CRUD (auth read, admin write); UI lands in step 15
+app.use(numbersRouter);
 
 // Health endpoint — pm2/Caddy/uptime monitors hit this.
 app.get('/api/health', (_req, res) => {
