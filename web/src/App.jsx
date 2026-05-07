@@ -10,6 +10,7 @@ import Layout from './Layout.jsx';
 import Login from './pages/Login.jsx';
 import AccessDenied from './pages/AccessDenied.jsx';
 import Dashboard from './pages/Dashboard.jsx';
+import Numbers from './pages/Numbers.jsx';
 import Placeholder from './pages/Placeholder.jsx';
 
 export default function App() {
@@ -22,7 +23,7 @@ export default function App() {
 
           <Route element={<RequireAuth><Layout /></RequireAuth>}>
             <Route path="/" element={<Dashboard />} />
-            <Route path="/numbers" element={<Placeholder title="Numbers" step={15} />} />
+            <Route path="/numbers" element={<Numbers />} />
             <Route path="/numbers/:id" element={<Placeholder title="Number detail" step={14} />} />
             <Route path="/volumes" element={<RequireAdmin><Placeholder title="Volumes" step={15} /></RequireAdmin>} />
             <Route path="/history" element={<Placeholder title="History" step={16} />} />

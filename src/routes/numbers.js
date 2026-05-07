@@ -5,6 +5,7 @@
 // traceable for monthly P&L disputes.
 
 import express from 'express';
+import * as XLSX from 'xlsx';
 import { requireAuth, requireAdmin } from '../auth/middleware.js';
 import { supabase } from '../supabase.js';
 import { auditLog, diffShallow } from '../util/audit.js';
@@ -68,6 +69,38 @@ numbersRouter.get('/api/numbers', requireAuth, async (req, res) => {
   const { data, error } = await query;
   if (error) return res.status(500).json({ ok: false, error: error.message });
   res.json({ ok: true, numbers: (data || []).map(rowShape) });
+});
+
+// ── GET /api/numbers/export.xlsx ────────────────────────────
+// Workbook with one row per number, columns matching the importer
+// (so an export → edit → re-import round-trip is possible). Fees
+// and LVN members are deliberately not exported here — those are
+// edited via the Number drawer and have their own audit trail.
+numbersRouter.get('/api/numbers/export.xlsx', requireAuth, async (_req, res) => {
+  const { data, error } = await supabase()
+    .from('numbers')
+    .select('number, type, country, client, purchase_price_per_mo, selling_price_per_mo, active')
+    .order('type', { ascending: true })
+    .order('number', { ascending: true });
+  if (error) return res.status(500).json({ ok: false, error: error.message });
+
+  const rows = (data || []).map((n) => ({
+    number: n.number,
+    type: n.type,
+    country: n.country || '',
+    client: n.client || '',
+    purchase_price: Number(n.purchase_price_per_mo),
+    selling_price: Number(n.selling_price_per_mo),
+    active: n.active ? 'true' : 'false',
+  }));
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows, {
+    header: ['number', 'type', 'country', 'client', 'purchase_price', 'selling_price', 'active'],
+  }), 'Numbers');
+  const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+  res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  res.setHeader('Content-Disposition', 'attachment; filename="mocount-numbers.xlsx"');
+  res.send(buf);
 });
 
 // ── POST /api/numbers ───────────────────────────────────────

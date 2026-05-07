@@ -318,6 +318,58 @@ table.data tr.row-dirty:hover { background: #1f2613; }
   margin-bottom: 10px;
 }
 
+/* ── Numbers page toolbar / filters ── */
+.numbers-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+.filter-row {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.filter-row input[type="text"],
+.filter-row select {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font: inherit;
+  color-scheme: dark;
+}
+.filter-row input:focus, .filter-row select:focus { border-color: var(--accent); outline: none; }
+
+.new-row {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 6px;
+  padding: 12px;
+  margin-bottom: 14px;
+  display: grid;
+  grid-template-columns: 1.4fr 0.7fr 0.7fr 1fr 1fr 1fr auto;
+  gap: 8px;
+  align-items: center;
+}
+.new-row input,
+.new-row select {
+  background: var(--bg);
+  color: var(--fg);
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 6px 10px;
+  font: inherit;
+  color-scheme: dark;
+}
+
+table.data tr.inactive { opacity: 0.55; }
+a.btn-ghost { display: inline-flex; align-items: center; }
+
 /* ── Link-style button (clickable Number cell) ── */
 .link-btn {
   background: none;
