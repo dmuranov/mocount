@@ -7,7 +7,14 @@
 import 'dotenv/config';
 import express from 'express';
 import cookieParser from 'cookie-parser';
+import { existsSync } from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { CONFIG, requireAuthEnv } from './src/config.js';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const WEB_DIST = path.join(__dirname, 'web', 'dist');
+const HAS_WEB_DIST = existsSync(path.join(WEB_DIST, 'index.html'));
 import { authRouter } from './src/routes/auth.js';
 import { usersRouter } from './src/routes/users.js';
 import { numbersRouter } from './src/routes/numbers.js';
@@ -48,35 +55,38 @@ app.get('/api/health', (_req, res) => {
   });
 });
 
-// ── Public pages ─────────────────────────────────────────────
-// These are inline HTML for now. The React shell (step 13) will
-// take over with routed components; until then, raw HTML is the
-// least-surprising way to wire up the auth flow.
+// ── Frontend ─────────────────────────────────────────────────
+// Once `web/dist/` is built (npm --prefix web run build), Express
+// serves the React SPA: static assets at their hashed paths, every
+// other GET falls through to index.html so client-side routing works.
+// Without a dist, we fall back to the vanilla HTML pages from steps
+// 3-4 so the smoke flow still works at any commit.
 
-app.get('/login', (_req, res) => {
-  res.type('html').send(loginHtml());
-});
-
-app.get('/access-denied', (_req, res) => {
-  res.type('html').send(accessDeniedHtml());
-});
-
-// Landing — show signed-in state if we can resolve the user, else
-// route to /login. The full dashboard arrives in step 13.
-app.get('/', loadUser, (req, res) => {
-  if (!req.user) return res.redirect('/login');
-  res.type('html').send(dashboardPlaceholder(req.user));
-});
-
-// Users admin page — vanilla HTML now, React Users.jsx replaces it in step 13.
-app.get('/users', loadUser, (req, res) => {
-  if (!req.user) return res.redirect('/login');
-  if (req.user.role !== 'admin') return res.redirect('/');
-  res.type('html').send(usersPageHtml(req.user));
-});
+if (HAS_WEB_DIST) {
+  app.use(express.static(WEB_DIST, { index: false }));
+  app.get(['/', '/login', '/access-denied', '/users', '/numbers', '/numbers/*', '/volumes', '/history', '/history/*', '/reports', '/reports/*', '/audit', '/settings/*'], (_req, res) => {
+    res.sendFile(path.join(WEB_DIST, 'index.html'));
+  });
+} else {
+  app.get('/login', (_req, res) => {
+    res.type('html').send(loginHtml());
+  });
+  app.get('/access-denied', (_req, res) => {
+    res.type('html').send(accessDeniedHtml());
+  });
+  app.get('/', loadUser, (req, res) => {
+    if (!req.user) return res.redirect('/login');
+    res.type('html').send(dashboardPlaceholder(req.user));
+  });
+  app.get('/users', loadUser, (req, res) => {
+    if (!req.user) return res.redirect('/login');
+    if (req.user.role !== 'admin') return res.redirect('/');
+    res.type('html').send(usersPageHtml(req.user));
+  });
+}
 
 app.listen(CONFIG.PORT, () => {
-  console.log(`mocount listening on ${CONFIG.APP_URL} (port ${CONFIG.PORT})`);
+  console.log(`mocount listening on ${CONFIG.APP_URL} (port ${CONFIG.PORT}) — web=${HAS_WEB_DIST ? 'react' : 'vanilla'}`);
 });
 
 // ── Inline HTML helpers ──────────────────────────────────────
