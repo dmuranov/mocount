@@ -1,15 +1,19 @@
-// Reports endpoints — SPEC §9 + §14 step 12.
-//   GET /api/reports/:yyyymm        (auth)  — 4-tab JSON
-//   GET /api/reports/:yyyymm/xlsx   (auth)  — single workbook, 4 sheets
+// Reports endpoints — SPEC §9 + §14 steps 12 + 17.
+//   GET  /api/reports                       (auth)  — list recent months
+//   GET  /api/reports/:yyyymm               (auth)  — 4-tab JSON
+//   GET  /api/reports/:yyyymm/xlsx          (auth)  — single workbook
+//   POST /api/reports/:yyyymm/prepare       (admin) — create 'pending' close
+//   POST /api/reports/:yyyymm/approve       (admin) — flip 'pending' -> 'approved'
 //
-// Both endpoints feed the same buildMonthReport output through. JSON
-// is the raw structure; xlsx flattens each tab into a sheet matching
-// the SPEC §5 column order.
+// The 'sent' transition + the Resend email lands in step 19 with the
+// monthly cron. Step 17 only flips 'approved'; everything beyond
+// that stays a no-op until then.
 
 import express from 'express';
 import * as XLSX from 'xlsx';
-import { requireAuth } from '../auth/middleware.js';
+import { requireAuth, requireAdmin } from '../auth/middleware.js';
 import { supabase } from '../supabase.js';
+import { auditLog } from '../util/audit.js';
 import { buildMonthReport } from '../services/reports.js';
 import { monthBounds } from '../services/calc.js';
 
@@ -48,6 +52,126 @@ async function loadReport(yyyymm) {
     month: yyyymm,
   });
 }
+
+// Build a YYYY-MM N months ago in UTC. Used to seed the recent-months
+// list shown on /reports.
+function ymOffset(monthsAgo, ref = new Date()) {
+  const d = new Date(Date.UTC(ref.getUTCFullYear(), ref.getUTCMonth() - monthsAgo, 1));
+  return `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, '0')}`;
+}
+
+// ── List recent months ──────────────────────────────────────
+// Returns the last 12 months merged with whatever monthly_closes
+// rows exist. Months without a close row come back as status='open'
+// with no snapshot — the UI shows them as "open" (not yet prepared).
+reportsRouter.get('/api/reports', requireAuth, async (_req, res) => {
+  const months = [];
+  for (let i = 0; i < 12; i++) months.push(ymOffset(i));
+
+  const { data: closes, error } = await supabase()
+    .from('monthly_closes')
+    .select('month, status, prepared_at, approved_at, approved_by, email_sent_at, snapshot')
+    .order('month', { ascending: false })
+    .limit(36);
+  if (error) return res.status(500).json({ ok: false, error: error.message });
+
+  const byMonth = new Map();
+  for (const c of closes || []) byMonth.set(c.month, c);
+  // Make sure any close older than 12 months still surfaces.
+  for (const c of closes || []) if (!months.includes(c.month)) months.push(c.month);
+
+  const list = months.sort((a, b) => b.localeCompare(a)).map((m) => {
+    const c = byMonth.get(m);
+    if (c) {
+      const headline = c.snapshot?.summary?.headline || null;
+      return {
+        month: m,
+        status: c.status,
+        prepared_at: c.prepared_at,
+        approved_at: c.approved_at,
+        approved_by: c.approved_by,
+        email_sent_at: c.email_sent_at,
+        headline,
+      };
+    }
+    return { month: m, status: 'open', prepared_at: null, approved_at: null, approved_by: null, email_sent_at: null, headline: null };
+  });
+  res.json({ ok: true, months: list });
+});
+
+// ── Prepare a month ─────────────────────────────────────────
+// Idempotent: re-running on a 'pending' month overwrites the
+// snapshot with a freshly computed one. Refuses if status is
+// already 'approved' or 'sent' (use a re-prep workflow once we
+// have one — for now the SPEC's expected path is cron-only).
+reportsRouter.post('/api/reports/:yyyymm/prepare', requireAdmin, async (req, res) => {
+  const ym = String(req.params.yyyymm || '').trim();
+  if (!YYYYMM_RE.test(ym)) return res.status(400).json({ ok: false, error: 'Path must be YYYY-MM' });
+  try {
+    const sb = supabase();
+    const { data: existing, error: loadErr } = await sb
+      .from('monthly_closes').select('status').eq('month', ym).maybeSingle();
+    if (loadErr) return res.status(500).json({ ok: false, error: loadErr.message });
+    if (existing && (existing.status === 'approved' || existing.status === 'sent')) {
+      return res.status(409).json({ ok: false, error: `Month ${ym} is already ${existing.status}` });
+    }
+
+    const snapshot = await loadReport(ym);
+    const row = {
+      month: ym,
+      status: 'pending',
+      snapshot,
+      prepared_at: new Date().toISOString(),
+    };
+    const { error: upErr } = existing
+      ? await sb.from('monthly_closes').update(row).eq('month', ym)
+      : await sb.from('monthly_closes').insert(row);
+    if (upErr) return res.status(500).json({ ok: false, error: upErr.message });
+
+    await auditLog({
+      userId: req.user.id,
+      action: 'monthly_close.prepare',
+      entity: 'monthly_close',
+      entityId: ym,
+      diff: { headline: snapshot.summary?.headline || null, source: existing ? 're-prepare' : 'first-prepare' },
+    });
+    res.json({ ok: true, month: ym, status: 'pending' });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── Approve a month ─────────────────────────────────────────
+// 'pending' -> 'approved'. The actual email send (status='sent') is
+// step 19 — this endpoint just locks the snapshot and unblocks the
+// admin from going further (the daily_volumes_lock_approved_month
+// trigger refuses writes for approved months).
+reportsRouter.post('/api/reports/:yyyymm/approve', requireAdmin, async (req, res) => {
+  const ym = String(req.params.yyyymm || '').trim();
+  if (!YYYYMM_RE.test(ym)) return res.status(400).json({ ok: false, error: 'Path must be YYYY-MM' });
+  const sb = supabase();
+  const { data: existing, error: loadErr } = await sb
+    .from('monthly_closes').select('status').eq('month', ym).maybeSingle();
+  if (loadErr) return res.status(500).json({ ok: false, error: loadErr.message });
+  if (!existing) return res.status(404).json({ ok: false, error: `Month ${ym} has no prepared close — run Prepare first` });
+  if (existing.status === 'approved' || existing.status === 'sent') {
+    return res.status(409).json({ ok: false, error: `Month ${ym} is already ${existing.status}` });
+  }
+  const { error: updErr } = await sb
+    .from('monthly_closes')
+    .update({ status: 'approved', approved_at: new Date().toISOString(), approved_by: req.user.id })
+    .eq('month', ym);
+  if (updErr) return res.status(500).json({ ok: false, error: updErr.message });
+
+  await auditLog({
+    userId: req.user.id,
+    action: 'monthly_close.approve',
+    entity: 'monthly_close',
+    entityId: ym,
+    diff: { status: ['pending', 'approved'] },
+  });
+  res.json({ ok: true, month: ym, status: 'approved' });
+});
 
 // ── JSON endpoint ───────────────────────────────────────────
 reportsRouter.get('/api/reports/:yyyymm', requireAuth, async (req, res) => {

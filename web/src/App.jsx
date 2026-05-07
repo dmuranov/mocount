@@ -13,6 +13,8 @@ import Dashboard from './pages/Dashboard.jsx';
 import Numbers from './pages/Numbers.jsx';
 import Volumes from './pages/Volumes.jsx';
 import History from './pages/History.jsx';
+import Reports from './pages/Reports.jsx';
+import ReportDetail from './pages/ReportDetail.jsx';
 import Placeholder from './pages/Placeholder.jsx';
 
 export default function App() {
@@ -29,8 +31,8 @@ export default function App() {
             <Route path="/numbers/:id" element={<Placeholder title="Number detail" step={14} />} />
             <Route path="/volumes" element={<RequireAdmin><Volumes /></RequireAdmin>} />
             <Route path="/history" element={<History />} />
-            <Route path="/reports" element={<Placeholder title="Reports" step={17} />} />
-            <Route path="/reports/:yyyymm" element={<Placeholder title="Report detail" step={17} />} />
+            <Route path="/reports" element={<Reports />} />
+            <Route path="/reports/:yyyymm" element={<ReportDetail />} />
             <Route path="/users" element={<RequireAdmin><Placeholder title="Users" step={13} /></RequireAdmin>} />
             <Route path="/audit" element={<RequireAdmin><Placeholder title="Audit log" step={20} /></RequireAdmin>} />
             <Route path="/settings/slack" element={<RequireAdmin><Placeholder title="Slack settings" step={18} /></RequireAdmin>} />
