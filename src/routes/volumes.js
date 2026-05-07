@@ -13,15 +13,11 @@
 // the audit page doesn't get spammed with no-op saves.
 
 import express from 'express';
-import multer from 'multer';
 import { requireAuth, requireAdmin } from '../auth/middleware.js';
 import { supabase } from '../supabase.js';
 import { auditLog } from '../util/audit.js';
-import { parseAndAnalyze, commitVolumesImport } from '../services/volumes_import.js';
 
 export const volumesRouter = express.Router();
-
-const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
 
 const ISO_DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
 
@@ -210,23 +206,3 @@ volumesRouter.post('/api/volumes', requireAdmin, async (req, res) => {
   }
 });
 
-// ── POST /api/volumes/import?dryRun=true ────────────────────
-// Multipart upload, single file field "file". Same preview-then-commit
-// pattern as numbers/import. dryRun=true returns { toUpsert, errors,
-// closedMonths }; dryRun=false re-runs the parse and writes.
-volumesRouter.post('/api/volumes/import', requireAdmin, upload.single('file'), async (req, res) => {
-  if (!req.file) return res.status(400).json({ ok: false, error: 'file field is required (multipart/form-data)' });
-  const dryRun = String(req.query.dryRun || 'true') !== 'false';
-  try {
-    if (dryRun) {
-      const plan = await parseAndAnalyze(req.file.buffer);
-      return res.json({ ok: true, dryRun: true, ...plan });
-    }
-    const result = await commitVolumesImport(req.file.buffer, req.user.id);
-    if (!result.ok) return res.status(400).json(result);
-    return res.json({ ok: true, dryRun: false, ...result });
-  } catch (err) {
-    console.error('[volumes/import]', err);
-    res.status(500).json({ ok: false, error: err.message });
-  }
-});

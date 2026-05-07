@@ -22,6 +22,7 @@ import { feesRouter } from './src/routes/fees.js';
 import { volumesRouter } from './src/routes/volumes.js';
 import { historyRouter } from './src/routes/history.js';
 import { reportsRouter } from './src/routes/reports.js';
+import { importRouter } from './src/routes/import.js';
 import { loadUser } from './src/auth/middleware.js';
 
 requireAuthEnv();
@@ -44,6 +45,8 @@ app.use(volumesRouter);
 app.use(historyRouter);
 // Reports JSON + xlsx (auth); UI lands in step 17
 app.use(reportsRouter);
+// Combined xlsx import (admin) — numbers + fees + volumes in one workbook
+app.use(importRouter);
 
 // Health endpoint — pm2/Caddy/uptime monitors hit this.
 app.get('/api/health', (_req, res) => {
