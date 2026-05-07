@@ -13,6 +13,7 @@ import { useEffect, useMemo, useState } from 'react';
 import { api } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import ImportPanel from '../components/ImportPanel.jsx';
+import NumberDrawer from '../components/NumberDrawer.jsx';
 
 function todayISO() {
   const d = new Date();
@@ -40,6 +41,7 @@ export default function Dashboard() {
   const [saving, setSaving] = useState(false);
 
   const [importOpen, setImportOpen] = useState(false);
+  const [drawerId, setDrawerId] = useState(null);
 
   async function loadAll(thisDate) {
     setError(null);
@@ -172,7 +174,9 @@ export default function Dashboard() {
               const dirty = edits.has(n.id) && editVal !== persisted;
               return (
                 <tr key={n.id} className={dirty ? 'row-dirty' : ''}>
-                  <td className="mono">{n.number}</td>
+                  <td className="mono">
+                    <button className="link-btn" onClick={() => setDrawerId(n.id)}>{n.number}</button>
+                  </td>
                   <td>{n.type}</td>
                   <td>{n.country || '—'}</td>
                   <td>{n.client || '—'}</td>
@@ -209,6 +213,12 @@ export default function Dashboard() {
           </button>
         </div>
       )}
+
+      <NumberDrawer
+        numberId={drawerId}
+        onClose={() => setDrawerId(null)}
+        onChanged={() => loadAll(date)}
+      />
 
       <ImportPanel
         open={importOpen}

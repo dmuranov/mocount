@@ -58,13 +58,28 @@ export function monthBounds(monthOrDate) {
 //   side === S AND type === 'monthly'
 //   AND effective_from <= last_day(M)
 //   AND (effective_to IS NULL OR effective_to >= first_day(M))
-//
-// Returns the list (rarely more than 1, but the single-active rule is
-// enforced in the service layer, not the data — so be defensive).
 export function activeMonthlyFees(fees, side, month) {
   const { firstDay, lastDay } = monthBounds(month);
   return (fees || []).filter((f) =>
     f && f.type === 'monthly' && f.side === side &&
+    String(f.effective_from) <= lastDay &&
+    (f.effective_to == null || String(f.effective_to) >= firstDay)
+  );
+}
+
+// Yearly fees billed in month M:
+//   side === S AND type === 'yearly'
+//   AND the calendar MONTH-OF-YEAR of effective_from === month-of-year of M
+//   AND effective_from <= last_day(M)        (it has started)
+//   AND (effective_to IS NULL OR effective_to >= first_day(M))
+//
+// e.g. effective_from='2026-01-15' bills $X every January from 2026 on.
+export function yearlyFeesInMonth(fees, side, month) {
+  const { firstDay, lastDay } = monthBounds(month);
+  const mm = String(month).slice(5, 7);
+  return (fees || []).filter((f) =>
+    f && f.type === 'yearly' && f.side === side &&
+    String(f.effective_from || '').slice(5, 7) === mm &&
     String(f.effective_from) <= lastDay &&
     (f.effective_to == null || String(f.effective_to) >= firstDay)
   );
@@ -113,16 +128,20 @@ export function buildMonthPnL({ numbers, volumes, fees, month }) {
   // Fees per side / type. Aggregate, then expose totals + buckets.
   const monthlyCost = activeMonthlyFees(fees, 'cost', month);
   const monthlySale = activeMonthlyFees(fees, 'sale', month);
-  const setupCost = setupFeesInMonth(fees, 'cost', month);
-  const setupSale = setupFeesInMonth(fees, 'sale', month);
+  const yearlyCost  = yearlyFeesInMonth(fees, 'cost', month);
+  const yearlySale  = yearlyFeesInMonth(fees, 'sale', month);
+  const setupCost   = setupFeesInMonth(fees, 'cost', month);
+  const setupSale   = setupFeesInMonth(fees, 'sale', month);
 
   const monthlyCostTotal = sumAmount(monthlyCost);
   const monthlySaleTotal = sumAmount(monthlySale);
-  const setupCostTotal = sumAmount(setupCost);
-  const setupSaleTotal = sumAmount(setupSale);
+  const yearlyCostTotal  = sumAmount(yearlyCost);
+  const yearlySaleTotal  = sumAmount(yearlySale);
+  const setupCostTotal   = sumAmount(setupCost);
+  const setupSaleTotal   = sumAmount(setupSale);
 
   const credit = revenue;
-  const debit = r2(monthlyCostTotal + setupCostTotal);
+  const debit = r2(monthlyCostTotal + yearlyCostTotal + setupCostTotal);
   const net = r2(credit - debit);
 
   return {
@@ -130,8 +149,18 @@ export function buildMonthPnL({ numbers, volumes, fees, month }) {
     totalVolume,
     revenue,
     fees: {
-      cost: { monthly: monthlyCostTotal, setup: setupCostTotal, total: r2(monthlyCostTotal + setupCostTotal) },
-      sale: { monthly: monthlySaleTotal, setup: setupSaleTotal, total: r2(monthlySaleTotal + setupSaleTotal) },
+      cost: {
+        monthly: monthlyCostTotal,
+        yearly:  yearlyCostTotal,
+        setup:   setupCostTotal,
+        total:   r2(monthlyCostTotal + yearlyCostTotal + setupCostTotal),
+      },
+      sale: {
+        monthly: monthlySaleTotal,
+        yearly:  yearlySaleTotal,
+        setup:   setupSaleTotal,
+        total:   r2(monthlySaleTotal + yearlySaleTotal + setupSaleTotal),
+      },
     },
     credit,
     debit,

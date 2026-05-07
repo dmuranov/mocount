@@ -5,7 +5,7 @@
 // If you call it mid-month, the data is just partial; that's by
 // design (matches what gets snapshotted in monthly_closes).
 
-import { margin, monthBounds, activeMonthlyFees, setupFeesInMonth } from './calc.js';
+import { margin, monthBounds, activeMonthlyFees, yearlyFeesInMonth, setupFeesInMonth } from './calc.js';
 
 function r2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 
@@ -36,23 +36,20 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
     monthVolume += Number(v.volume) || 0;
   }
 
-  // Resolve active monthly + in-month setup fees, indexed per number/side.
-  const monthlyByNumberSide = new Map(); // 'numId|side' -> {amount}
-  const setupByNumberSide = new Map();   // 'numId|side' -> sum amount
-  function addMonthly(key, amt) {
-    // Defensive: if more than one open-ended fee somehow slipped through,
-    // sum them (matches what the P&L would do anyway).
-    monthlyByNumberSide.set(key, (monthlyByNumberSide.get(key) || 0) + amt);
-  }
-  function addSetup(key, amt) {
-    setupByNumberSide.set(key, (setupByNumberSide.get(key) || 0) + amt);
-  }
+  // Resolve active monthly + yearly + in-month setup fees, indexed per number/side.
+  const monthlyByNumberSide = new Map(); // 'numId|side' -> sum amount
+  const yearlyByNumberSide  = new Map();
+  const setupByNumberSide   = new Map();
+  function addInto(map, key, amt) { map.set(key, (map.get(key) || 0) + amt); }
   for (const side of ['cost', 'sale']) {
     for (const f of activeMonthlyFees(fees || [], side, month)) {
-      addMonthly(`${f.number_id}|${side}`, Number(f.amount) || 0);
+      addInto(monthlyByNumberSide, `${f.number_id}|${side}`, Number(f.amount) || 0);
+    }
+    for (const f of yearlyFeesInMonth(fees || [], side, month)) {
+      addInto(yearlyByNumberSide, `${f.number_id}|${side}`, Number(f.amount) || 0);
     }
     for (const f of setupFeesInMonth(fees || [], side, month)) {
-      addSetup(`${f.number_id}|${side}`, Number(f.amount) || 0);
+      addInto(setupByNumberSide, `${f.number_id}|${side}`, Number(f.amount) || 0);
     }
   }
 
@@ -68,9 +65,11 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
     const purchase = Number(n.purchase_price_per_mo) || 0;
     const selling = Number(n.selling_price_per_mo) || 0;
     const monthlyCost = monthlyByNumberSide.get(`${n.id}|cost`) || 0;
-    const setupCost = setupByNumberSide.get(`${n.id}|cost`) || 0;
+    const yearlyCost  = yearlyByNumberSide.get(`${n.id}|cost`) || 0;
+    const setupCost   = setupByNumberSide.get(`${n.id}|cost`) || 0;
     const monthlySale = monthlyByNumberSide.get(`${n.id}|sale`) || 0;
-    const setupSale = setupByNumberSide.get(`${n.id}|sale`) || 0;
+    const yearlySale  = yearlyByNumberSide.get(`${n.id}|sale`) || 0;
+    const setupSale   = setupByNumberSide.get(`${n.id}|sale`) || 0;
     return {
       id: n.id,
       number: n.number,
@@ -84,12 +83,14 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
       revenue: r2(volume * m),
       cost_volume: r2(volume * purchase),
       cost_monthly_fee: r2(monthlyCost),
+      cost_yearly_fee: r2(yearlyCost),
       cost_setup_fee: r2(setupCost),
-      cost_total: r2(volume * purchase + monthlyCost + setupCost),
+      cost_total: r2(volume * purchase + monthlyCost + yearlyCost + setupCost),
       sales_volume: r2(volume * selling),
       sale_monthly_fee: r2(monthlySale),
+      sale_yearly_fee: r2(yearlySale),
       sale_setup_fee: r2(setupSale),
-      sale_total: r2(volume * selling + monthlySale + setupSale),
+      sale_total: r2(volume * selling + monthlySale + yearlySale + setupSale),
     };
   });
 
@@ -98,42 +99,37 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
   // in-month cost-setup fee. Lines reference Number for traceability.
   const debitLines = [];
   let monthlyCostTotal = 0;
+  let yearlyCostTotal = 0;
   let setupCostTotal = 0;
+  const KIND_ORDER = { cost_monthly: 0, cost_yearly: 1, cost_setup: 2 };
   for (const f of activeMonthlyFees(fees || [], 'cost', month)) {
     const n = byId.get(f.number_id);
     if (!n) continue;
     const amt = Number(f.amount) || 0;
     monthlyCostTotal += amt;
-    debitLines.push({
-      kind: 'cost_monthly',
-      number_id: n.id,
-      number: n.number,
-      label: `Cost monthly — ${n.number}`,
-      amount: r2(amt),
-    });
+    debitLines.push({ kind: 'cost_monthly', number_id: n.id, number: n.number, label: `Monthly fee — ${n.number}`, amount: r2(amt) });
+  }
+  for (const f of yearlyFeesInMonth(fees || [], 'cost', month)) {
+    const n = byId.get(f.number_id);
+    if (!n) continue;
+    const amt = Number(f.amount) || 0;
+    yearlyCostTotal += amt;
+    debitLines.push({ kind: 'cost_yearly', number_id: n.id, number: n.number, label: `Yearly fee — ${n.number}`, amount: r2(amt) });
   }
   for (const f of setupFeesInMonth(fees || [], 'cost', month)) {
     const n = byId.get(f.number_id);
     if (!n) continue;
     const amt = Number(f.amount) || 0;
     setupCostTotal += amt;
-    debitLines.push({
-      kind: 'cost_setup',
-      number_id: n.id,
-      number: n.number,
-      label: `Cost setup — ${n.number}`,
-      amount: r2(amt),
-      effective_from: f.effective_from,
-    });
+    debitLines.push({ kind: 'cost_setup', number_id: n.id, number: n.number, label: `Setup fee — ${n.number}`, amount: r2(amt), effective_from: f.effective_from });
   }
-  // Stable line order: cost_monthly first then cost_setup, then by number.
   debitLines.sort((a, b) => {
-    if (a.kind !== b.kind) return a.kind === 'cost_monthly' ? -1 : 1;
+    if (a.kind !== b.kind) return KIND_ORDER[a.kind] - KIND_ORDER[b.kind];
     return String(a.number).localeCompare(String(b.number));
   });
 
   const totalRevenue = r2(perRow.reduce((acc, r) => acc + r.revenue, 0));
-  const totalCostFees = r2(monthlyCostTotal + setupCostTotal);
+  const totalCostFees = r2(monthlyCostTotal + yearlyCostTotal + setupCostTotal);
   const summary = {
     headline: {
       total_volume: monthVolume,
@@ -141,13 +137,12 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
       total_cost_fees: totalCostFees,
       net: r2(totalRevenue - totalCostFees),
     },
-    credit: {
-      total_revenue: totalRevenue,
-    },
+    credit: { total_revenue: totalRevenue },
     debit: {
       lines: debitLines,
       monthly_total: r2(monthlyCostTotal),
-      setup_total: r2(setupCostTotal),
+      yearly_total:  r2(yearlyCostTotal),
+      setup_total:   r2(setupCostTotal),
       total: totalCostFees,
     },
     net: r2(totalRevenue - totalCostFees),
@@ -181,6 +176,7 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
     purchase_price: r.purchase_price,
     cost: r.cost_volume,
     monthly_fee: r.cost_monthly_fee,
+    yearly_fee: r.cost_yearly_fee,
     setup_fee: r.cost_setup_fee,
     total_cost: r.cost_total,
   }));
@@ -190,6 +186,7 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
       volume: costRows.reduce((acc, x) => acc + x.volume, 0),
       cost: r2(costRows.reduce((acc, x) => acc + x.cost, 0)),
       monthly_fee: r2(costRows.reduce((acc, x) => acc + x.monthly_fee, 0)),
+      yearly_fee: r2(costRows.reduce((acc, x) => acc + x.yearly_fee, 0)),
       setup_fee: r2(costRows.reduce((acc, x) => acc + x.setup_fee, 0)),
       total_cost: r2(costRows.reduce((acc, x) => acc + x.total_cost, 0)),
     },
@@ -209,6 +206,7 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
       selling_price: r.selling_price,
       sales: r.sales_volume,
       monthly_fee: r.sale_monthly_fee,
+      yearly_fee: r.sale_yearly_fee,
       setup_fee: r.sale_setup_fee,
       total: r.sale_total,
     });
@@ -223,6 +221,7 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
           volume: rows.reduce((acc, x) => acc + x.volume, 0),
           sales: r2(rows.reduce((acc, x) => acc + x.sales, 0)),
           monthly_fee: r2(rows.reduce((acc, x) => acc + x.monthly_fee, 0)),
+          yearly_fee: r2(rows.reduce((acc, x) => acc + x.yearly_fee, 0)),
           setup_fee: r2(rows.reduce((acc, x) => acc + x.setup_fee, 0)),
           total: r2(rows.reduce((acc, x) => acc + x.total, 0)),
         },
@@ -233,6 +232,7 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
     volume: clientBilling.groups.reduce((acc, g) => acc + g.subtotal.volume, 0),
     sales: r2(clientBilling.groups.reduce((acc, g) => acc + g.subtotal.sales, 0)),
     monthly_fee: r2(clientBilling.groups.reduce((acc, g) => acc + g.subtotal.monthly_fee, 0)),
+    yearly_fee: r2(clientBilling.groups.reduce((acc, g) => acc + g.subtotal.yearly_fee, 0)),
     setup_fee: r2(clientBilling.groups.reduce((acc, g) => acc + g.subtotal.setup_fee, 0)),
     total: r2(clientBilling.groups.reduce((acc, g) => acc + g.subtotal.total, 0)),
   };

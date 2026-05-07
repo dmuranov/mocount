@@ -59,13 +59,17 @@ CREATE INDEX IF NOT EXISTS idx_daily_volumes_date ON daily_volumes(date);
 CREATE INDEX IF NOT EXISTS idx_daily_volumes_number_date ON daily_volumes(number_id, date);
 
 -- ── fees ────────────────────────────────────────────────────
--- type IN ('monthly','setup'); side IN ('cost','sale').
--- Service layer guarantees at most one ACTIVE fee per (number, type, side)
--- — editing closes the previous via effective_to and inserts a new row.
+-- type IN ('monthly','yearly','setup'); side IN ('cost','sale').
+--   monthly — recurring every calendar month from effective_from
+--   yearly  — recurring once a year, in the calendar month of effective_from
+--   setup   — one-off, charged in the calendar month of effective_from
+-- Service layer guarantees at most one ACTIVE recurring fee per
+-- (number, type, side) — editing closes the previous via effective_to
+-- and inserts a new row. Setup fees aren't "active"; they're per-event.
 CREATE TABLE IF NOT EXISTS fees (
   id              uuid           PRIMARY KEY DEFAULT gen_random_uuid(),
   number_id       uuid           NOT NULL REFERENCES numbers(id) ON DELETE CASCADE,
-  type            text           NOT NULL CHECK (type IN ('monthly','setup')),
+  type            text           NOT NULL CHECK (type IN ('monthly','yearly','setup')),
   side            text           NOT NULL CHECK (side IN ('cost','sale')),
   amount          numeric(10,2)  NOT NULL,
   effective_from  date           NOT NULL,
@@ -73,6 +77,13 @@ CREATE TABLE IF NOT EXISTS fees (
   created_at      timestamptz    NOT NULL DEFAULT now(),
   created_by      uuid           REFERENCES users(id) ON DELETE SET NULL
 );
+
+-- Idempotent on a fresh DB; existing DBs need a one-time migration —
+-- see db/migrations/2026-05-07_fees_yearly.sql for the live update.
+DO $$ BEGIN
+  ALTER TABLE fees DROP CONSTRAINT IF EXISTS fees_type_check;
+  ALTER TABLE fees ADD CONSTRAINT fees_type_check CHECK (type IN ('monthly','yearly','setup'));
+END $$;
 CREATE INDEX IF NOT EXISTS idx_fees_number_side_type ON fees(number_id, side, type);
 CREATE INDEX IF NOT EXISTS idx_fees_effective ON fees(effective_from, effective_to);
 

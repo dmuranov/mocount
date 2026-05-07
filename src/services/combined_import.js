@@ -39,10 +39,14 @@ const HEADER_ALIASES = new Map(Object.entries({
   sale_price: 'selling_price',
   cost_monthly_fee: 'cost_monthly_fee',
   cost_monthly_from: 'cost_monthly_from',
+  cost_yearly_fee: 'cost_yearly_fee',
+  cost_yearly_from: 'cost_yearly_from',
   cost_setup_fee: 'cost_setup_fee',
   cost_setup_date: 'cost_setup_date',
   sale_monthly_fee: 'sale_monthly_fee',
   sale_monthly_from: 'sale_monthly_from',
+  sale_yearly_fee: 'sale_yearly_fee',
+  sale_yearly_from: 'sale_yearly_from',
   sale_setup_fee: 'sale_setup_fee',
   sale_setup_date: 'sale_setup_date',
   active: 'active',
@@ -57,8 +61,10 @@ const HEADER_ALIASES = new Map(Object.entries({
 // Fee column groups: each tuple = [amountKey, dateKey, side, type].
 const FEE_GROUPS = [
   ['cost_monthly_fee', 'cost_monthly_from', 'cost', 'monthly'],
+  ['cost_yearly_fee',  'cost_yearly_from',  'cost', 'yearly'],
   ['cost_setup_fee',   'cost_setup_date',   'cost', 'setup'],
   ['sale_monthly_fee', 'sale_monthly_from', 'sale', 'monthly'],
+  ['sale_yearly_fee',  'sale_yearly_from',  'sale', 'yearly'],
   ['sale_setup_fee',   'sale_setup_date',   'sale', 'setup'],
 ];
 

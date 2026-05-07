@@ -19,7 +19,8 @@ import { auditLog, diffShallow } from '../util/audit.js';
 
 export const feesRouter = express.Router();
 
-const VALID_TYPES = new Set(['monthly', 'setup']);
+const VALID_TYPES = new Set(['monthly', 'yearly', 'setup']);
+const RECURRING_TYPES = new Set(['monthly', 'yearly']);
 const VALID_SIDES = new Set(['cost', 'sale']);
 
 function normAmount(v, label) {
@@ -108,22 +109,23 @@ feesRouter.post('/api/numbers/:id/fees', requireAdmin, async (req, res) => {
     const amount = normAmount(req.body?.amount, 'amount');
     const effective_from = normDate(req.body?.effective_from, 'effective_from');
     let effective_to = null;
-    if (type === 'monthly' && req.body?.effective_to) {
+    if (RECURRING_TYPES.has(type) && req.body?.effective_to) {
       effective_to = normDate(req.body.effective_to, 'effective_to');
       if (effective_to < effective_from) {
         return res.status(400).json({ ok: false, error: 'effective_to cannot be before effective_from' });
       }
     }
 
-    // Single-active rule: close any prior open-ended monthly fee on the
-    // same (number, type, side) before inserting the new one.
+    // Single-active rule: close any prior open-ended recurring fee
+    // (monthly or yearly) on the same (number, type, side) before
+    // inserting the new one. Setup fees stay independent.
     let closedPriorId = null;
-    if (type === 'monthly') {
+    if (RECURRING_TYPES.has(type)) {
       const { data: prior, error: priorErr } = await supabase()
         .from('fees')
         .select('id, effective_from, effective_to')
         .eq('number_id', numberId)
-        .eq('type', 'monthly')
+        .eq('type', type)
         .eq('side', side)
         .is('effective_to', null)
         .maybeSingle();
@@ -198,8 +200,8 @@ feesRouter.patch('/api/fees/:id', requireAdmin, async (req, res) => {
     }
     if (req.body?.effective_to !== undefined) {
       if (req.body.effective_to === null || req.body.effective_to === '') {
-        if (existing.type !== 'monthly') {
-          return res.status(400).json({ ok: false, error: 'Only monthly fees may have effective_to' });
+        if (!RECURRING_TYPES.has(existing.type)) {
+          return res.status(400).json({ ok: false, error: 'Only recurring fees (monthly/yearly) may have effective_to' });
         }
         patch.effective_to = null;
       } else {

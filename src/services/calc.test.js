@@ -12,6 +12,7 @@ import {
   dayRow,
   monthBounds,
   activeMonthlyFees,
+  yearlyFeesInMonth,
   setupFeesInMonth,
   sumAmount,
   buildMonthPnL,
@@ -87,6 +88,56 @@ test('activeMonthlyFees: side filter', () => {
 test('activeMonthlyFees: type filter excludes setup', () => {
   const fees = [{ type: 'setup', side: 'cost', amount: 100, effective_from: '2026-04-15', effective_to: null }];
   assert.equal(activeMonthlyFees(fees, 'cost', '2026-04').length, 0);
+});
+
+test('yearlyFeesInMonth: bills in anniversary month only', () => {
+  const fees = [
+    { type: 'yearly', side: 'cost', amount: 600, effective_from: '2026-01-15', effective_to: null },
+  ];
+  // January any year on/after 2026 → bills.
+  assert.equal(yearlyFeesInMonth(fees, 'cost', '2026-01').length, 1);
+  assert.equal(yearlyFeesInMonth(fees, 'cost', '2027-01').length, 1);
+  assert.equal(yearlyFeesInMonth(fees, 'cost', '2030-01').length, 1);
+  // Other months → no.
+  assert.equal(yearlyFeesInMonth(fees, 'cost', '2026-02').length, 0);
+  assert.equal(yearlyFeesInMonth(fees, 'cost', '2027-07').length, 0);
+});
+
+test('yearlyFeesInMonth: not active before effective_from', () => {
+  const fees = [{ type: 'yearly', side: 'cost', amount: 600, effective_from: '2026-06-01', effective_to: null }];
+  assert.equal(yearlyFeesInMonth(fees, 'cost', '2025-06').length, 0);
+  assert.equal(yearlyFeesInMonth(fees, 'cost', '2026-06').length, 1);
+});
+
+test('yearlyFeesInMonth: closed yearly skipped after effective_to', () => {
+  const fees = [{ type: 'yearly', side: 'cost', amount: 600, effective_from: '2026-01-15', effective_to: '2027-12-31' }];
+  assert.equal(yearlyFeesInMonth(fees, 'cost', '2027-01').length, 1); // last billing year
+  assert.equal(yearlyFeesInMonth(fees, 'cost', '2028-01').length, 0); // closed before
+});
+
+test('yearlyFeesInMonth: side filter', () => {
+  const fees = [
+    { type: 'yearly', side: 'cost', amount: 100, effective_from: '2026-03-01' },
+    { type: 'yearly', side: 'sale', amount: 200, effective_from: '2026-03-01' },
+  ];
+  assert.equal(yearlyFeesInMonth(fees, 'cost', '2027-03').length, 1);
+  assert.equal(yearlyFeesInMonth(fees, 'sale', '2027-03').length, 1);
+});
+
+test('buildMonthPnL: yearly fee shows up only in anniversary month', () => {
+  const numbers = [{ id: 'n1', purchase_price_per_mo: 0.02, selling_price_per_mo: 0.04 }];
+  const fees = [{ number_id: 'n1', type: 'yearly', side: 'cost', amount: 600, effective_from: '2026-01-15', effective_to: null }];
+
+  const jan = buildMonthPnL({ numbers, volumes: [], fees, month: '2026-01' });
+  assert.equal(jan.fees.cost.yearly, 600);
+  assert.equal(jan.debit, 600);
+
+  const feb = buildMonthPnL({ numbers, volumes: [], fees, month: '2026-02' });
+  assert.equal(feb.fees.cost.yearly, 0);
+  assert.equal(feb.debit, 0);
+
+  const jan2027 = buildMonthPnL({ numbers, volumes: [], fees, month: '2027-01' });
+  assert.equal(jan2027.fees.cost.yearly, 600);
 });
 
 test('setupFeesInMonth: only fees in the exact month', () => {

@@ -317,3 +317,198 @@ table.data tr.row-dirty:hover { background: #1f2613; }
   font-size: 13px;
   margin-bottom: 10px;
 }
+
+/* ── Link-style button (clickable Number cell) ── */
+.link-btn {
+  background: none;
+  border: none;
+  color: var(--accent);
+  font: inherit;
+  font-family: "SF Mono", Monaco, monospace;
+  padding: 0;
+  cursor: pointer;
+}
+.link-btn:hover { text-decoration: underline; }
+
+/* ── NumberDetail drawer ── */
+.drawer-bg {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  z-index: 60;
+  display: flex;
+  justify-content: flex-end;
+}
+.drawer {
+  width: min(620px, 96vw);
+  background: var(--bg);
+  border-left: 1px solid var(--line);
+  padding: 20px 22px 40px;
+  overflow-y: auto;
+  height: 100vh;
+  animation: slideIn 160ms ease-out;
+}
+@keyframes slideIn {
+  from { transform: translateX(40px); opacity: 0.4; }
+  to   { transform: translateX(0);    opacity: 1; }
+}
+.drawer-hdr {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 14px;
+  padding-bottom: 10px;
+  border-bottom: 1px solid var(--line);
+}
+.drawer-hdr h3 {
+  margin: 0;
+  font-size: 15px;
+  font-weight: 700;
+}
+.drawer-hdr h3 span {
+  margin-left: 10px;
+  color: var(--muted);
+  font-weight: 400;
+  font-size: 12px;
+}
+.drawer-sect {
+  margin: 18px 0;
+}
+.drawer-sect h4 {
+  margin: 0 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: var(--muted);
+}
+.form-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 10px 14px;
+  align-items: end;
+}
+.form-grid label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.form-grid input[type="text"],
+.form-grid input:not([type]),
+.form-grid input[type="date"],
+.form-grid input[type="number"] {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+  color-scheme: dark;
+}
+.form-grid input:focus { border-color: var(--accent); outline: none; }
+label.tick {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+  color: var(--fg);
+}
+.kv {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 10px;
+}
+.kv > div {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 10px 12px;
+}
+.kv-label {
+  color: var(--muted);
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.kv-pricing-margin {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 13px;
+}
+
+/* Fee buckets */
+.fee-list {
+  list-style: none;
+  padding: 0;
+  margin: 0 0 8px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.fee-row {
+  display: grid;
+  grid-template-columns: 90px 1fr auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.fee-row:last-child { border-bottom: none; }
+.fee-row .fee-amt { font-weight: 600; }
+.fee-actions { display: flex; gap: 6px; }
+.btn-ghost.danger { color: var(--danger-fg); border-color: #5b2222; }
+.btn-ghost.danger:hover { background: #2a0e0e; }
+.fee-row.fee-edit {
+  grid-template-columns: 100px 130px 130px auto auto;
+  background: #14271a;
+}
+.fee-add {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin-top: 6px;
+}
+.fee-add input {
+  background: var(--bg-elev);
+  color: var(--fg);
+  border: 1px solid #333;
+  border-radius: 4px;
+  padding: 6px 8px;
+  font: inherit;
+  color-scheme: dark;
+}
+.fee-add input[type="number"] { width: 110px; }
+.fee-add input[type="date"] { width: 150px; }
+
+/* Audit list */
+.audit-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.audit-list li {
+  background: var(--bg-elev);
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 12px;
+}
+.audit-date { color: var(--dim); margin-right: 10px; }
+.audit-action { color: var(--accent); margin-right: 10px; }
+.audit-who { color: var(--muted); float: right; }
+.audit-list details { margin-top: 6px; }
+.audit-list summary { color: var(--muted); cursor: pointer; font-size: 11px; }
