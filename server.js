@@ -14,6 +14,7 @@ import { numbersRouter } from './src/routes/numbers.js';
 import { feesRouter } from './src/routes/fees.js';
 import { volumesRouter } from './src/routes/volumes.js';
 import { historyRouter } from './src/routes/history.js';
+import { reportsRouter } from './src/routes/reports.js';
 import { loadUser } from './src/auth/middleware.js';
 
 requireAuthEnv();
@@ -34,6 +35,8 @@ app.use(feesRouter);
 app.use(volumesRouter);
 // History matrix (auth); UI lands in step 16
 app.use(historyRouter);
+// Reports JSON + xlsx (auth); UI lands in step 17
+app.use(reportsRouter);
 
 // Health endpoint — pm2/Caddy/uptime monitors hit this.
 app.get('/api/health', (_req, res) => {
