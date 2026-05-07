@@ -17,6 +17,7 @@ import Reports from './pages/Reports.jsx';
 import ReportDetail from './pages/ReportDetail.jsx';
 import SlackSettings from './pages/SlackSettings.jsx';
 import Audit from './pages/Audit.jsx';
+import Users from './pages/Users.jsx';
 import Placeholder from './pages/Placeholder.jsx';
 
 export default function App() {
@@ -35,7 +36,7 @@ export default function App() {
             <Route path="/history" element={<History />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/reports/:yyyymm" element={<ReportDetail />} />
-            <Route path="/users" element={<RequireAdmin><Placeholder title="Users" step={13} /></RequireAdmin>} />
+            <Route path="/users" element={<RequireAdmin><Users /></RequireAdmin>} />
             <Route path="/audit" element={<RequireAdmin><Audit /></RequireAdmin>} />
             <Route path="/settings/slack" element={<RequireAdmin><SlackSettings /></RequireAdmin>} />
           </Route>
