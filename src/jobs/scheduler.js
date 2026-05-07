@@ -9,6 +9,11 @@
 import cron from 'node-cron';
 import { postDaily, todayUTC } from '../services/slack.js';
 import { supabase } from '../supabase.js';
+import { CONFIG } from '../config.js';
+import { buildMonthReport } from '../services/reports.js';
+import { monthBounds } from '../services/calc.js';
+import { sendPrepReadyToAdmins } from '../services/email.js';
+import { auditLog } from '../util/audit.js';
 
 // Keep a handle so tests / hot reload can stop us if needed.
 const tasks = [];
@@ -42,7 +47,73 @@ export function startScheduler() {
     }
   });
   tasks.push(t);
-  console.log('[scheduler] started — slack daily polling every 5 min');
+
+  // Monthly prep — day 1 at 06:00 UTC. Auto-creates the prior month's
+  // pending close (if not already prepared/approved) and emails admins
+  // with the review link.
+  const monthly = cron.schedule('0 6 1 * *', async () => {
+    try {
+      await runMonthlyPrep();
+    } catch (e) {
+      console.error('[scheduler] monthly prep failed:', e.message);
+    }
+  });
+  tasks.push(monthly);
+
+  console.log('[scheduler] started — slack daily (every 5 min) + monthly prep (day 1, 06:00 UTC)');
+}
+
+// Exported so admins can trigger a re-run manually if the cron missed.
+export async function runMonthlyPrep(now = new Date()) {
+  // Prior month relative to "now". On day 1 at 06:00 UTC, "now"'s
+  // month is the new month; we want the one that just closed.
+  const prior = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth() - 1, 1));
+  const ym = `${prior.getUTCFullYear()}-${String(prior.getUTCMonth() + 1).padStart(2, '0')}`;
+  const sb = supabase();
+
+  const { data: existing, error: loadErr } = await sb
+    .from('monthly_closes').select('status').eq('month', ym).maybeSingle();
+  if (loadErr) throw new Error(loadErr.message);
+  if (existing && (existing.status === 'approved' || existing.status === 'sent')) {
+    console.log(`[scheduler] ${ym} already ${existing.status}, skipping prep`);
+    return { skipped: true, reason: existing.status };
+  }
+
+  // Build snapshot fresh.
+  const bounds = monthBounds(ym);
+  const [{ data: numbers, error: nErr }, { data: volumes, error: vErr }, { data: fees, error: fErr }] = await Promise.all([
+    sb.from('numbers').select('id, number, type, country, client, purchase_price_per_mo, selling_price_per_mo, active'),
+    sb.from('daily_volumes').select('number_id, date, volume')
+      .gte('date', bounds.firstDay).lte('date', bounds.lastDay),
+    sb.from('fees').select('number_id, type, side, amount, effective_from, effective_to')
+      .lte('effective_from', bounds.lastDay)
+      .or(`effective_to.is.null,effective_to.gte.${bounds.firstDay}`),
+  ]);
+  if (nErr) throw new Error(nErr.message);
+  if (vErr) throw new Error(vErr.message);
+  if (fErr) throw new Error(fErr.message);
+  const snapshot = buildMonthReport({ numbers: numbers || [], volumes: volumes || [], fees: fees || [], month: ym });
+
+  const row = { month: ym, status: 'pending', snapshot, prepared_at: new Date().toISOString() };
+  const { error: upErr } = existing
+    ? await sb.from('monthly_closes').update(row).eq('month', ym)
+    : await sb.from('monthly_closes').insert(row);
+  if (upErr) throw new Error(upErr.message);
+
+  await auditLog({
+    userId: null, action: 'monthly_close.prepare', entity: 'monthly_close', entityId: ym,
+    diff: { source: 'cron', headline: snapshot.summary?.headline || null },
+  });
+
+  // Tell admins it's ready.
+  let notify = null;
+  try {
+    notify = await sendPrepReadyToAdmins(ym, CONFIG.APP_URL);
+  } catch (e) {
+    console.error('[scheduler] prep email failed:', e.message);
+  }
+  console.log(`[scheduler] monthly prep complete for ${ym}; notified ${notify?.sent_to?.length ?? 0} admins`);
+  return { ok: true, month: ym, notified: notify?.sent_to || [] };
 }
 
 export function stopScheduler() {

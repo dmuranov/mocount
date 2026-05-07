@@ -32,6 +32,7 @@ export const CONFIG = {
 
   RESEND_API_KEY: optional('RESEND_API_KEY'),
   EMAIL_FROM: optional('EMAIL_FROM', 'mocount@mocount.com'),
+  EMAIL_REPLY_TO: optional('EMAIL_REPLY_TO'),
 
   SESSION_SECRET: optional('SESSION_SECRET'),
 };

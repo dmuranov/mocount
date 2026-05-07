@@ -45,17 +45,59 @@ export default function Reports() {
     finally { setBusy(null); }
   }
 
-  async function approve(month) {
-    if (!confirm(`Approve ${month}? Daily volumes for that month will be locked.`)) return;
+  async function approveAndSend(month) {
+    if (!confirm(`Approve ${month} and email the report to all recipients with monthly emails enabled?`)) return;
     setBusy(month); setError(null);
-    try { await api.post(`/api/reports/${month}/approve`); await load(); }
-    catch (e) { setError(e.message); }
+    try {
+      await api.post(`/api/reports/${month}/approve`);
+      const sendRes = await api.post(`/api/reports/${month}/send-email`);
+      if (sendRes.errors?.length) {
+        setError(`Approved + sent to ${sendRes.sent_to.length}; ${sendRes.errors.length} failed: ${sendRes.errors.map((e) => e.email).join(', ')}`);
+      }
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function resend(month) {
+    if (!confirm(`Re-send the ${month} report to every recipient?`)) return;
+    setBusy(month); setError(null);
+    try {
+      const sendRes = await api.post(`/api/reports/${month}/send-email`);
+      if (sendRes.errors?.length) {
+        setError(`Sent to ${sendRes.sent_to.length}; ${sendRes.errors.length} failed.`);
+      }
+      await load();
+    } catch (e) { setError(e.message); }
+    finally { setBusy(null); }
+  }
+
+  async function runPrep() {
+    setBusy('prep'); setError(null);
+    try {
+      const r = await api.post('/api/reports/run-prep');
+      if (r.skipped) setError(`Prep skipped: ${r.reason}`);
+      await load();
+    } catch (e) { setError(e.message); }
     finally { setBusy(null); }
   }
 
   return (
     <div className="page">
       {error && <div className="err-box" style={{ marginBottom: 14 }}>{error}</div>}
+
+      {isAdmin && (
+        <div className="numbers-toolbar">
+          <p className="mono" style={{ color: 'var(--dim)', margin: 0 }}>
+            // monthly prep auto-runs day 1, 06:00 UTC. Use Run prep now to force a fresh snapshot of the prior month.
+          </p>
+          <div className="dash-actions">
+            <button className="btn-ghost" disabled={busy === 'prep'} onClick={runPrep}>
+              {busy === 'prep' ? 'Running…' : 'Run prep now'}
+            </button>
+          </div>
+        </div>
+      )}
 
       <div className="table-wrap">
         <table className="data">
@@ -99,10 +141,15 @@ export default function Reports() {
                       {m.status === 'pending' && (
                         <>
                           <button className="btn-ghost" disabled={busy === m.month} onClick={() => prepare(m.month)}>Re-prepare</button>{' '}
-                          <button className="btn-primary" disabled={busy === m.month} onClick={() => approve(m.month)}>Approve</button>
+                          <button className="btn-primary" disabled={busy === m.month} onClick={() => approveAndSend(m.month)}>Approve &amp; Send</button>
                         </>
                       )}
-                      {(m.status === 'approved' || m.status === 'sent') && <span className="mono" style={{ color: 'var(--dim)' }}>locked</span>}
+                      {m.status === 'approved' && (
+                        <button className="btn-primary" disabled={busy === m.month} onClick={() => resend(m.month)}>Send email</button>
+                      )}
+                      {m.status === 'sent' && (
+                        <button className="btn-ghost" disabled={busy === m.month} onClick={() => resend(m.month)}>Re-send</button>
+                      )}
                     </td>
                   )}
                 </tr>

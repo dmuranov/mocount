@@ -15,6 +15,8 @@ import { requireAuth, requireAdmin } from '../auth/middleware.js';
 import { supabase } from '../supabase.js';
 import { auditLog } from '../util/audit.js';
 import { buildMonthReport } from '../services/reports.js';
+import { sendMonthlyReport } from '../services/email.js';
+import { runMonthlyPrep } from '../jobs/scheduler.js';
 import { monthBounds } from '../services/calc.js';
 
 export const reportsRouter = express.Router();
@@ -171,6 +173,34 @@ reportsRouter.post('/api/reports/:yyyymm/approve', requireAdmin, async (req, res
     diff: { status: ['pending', 'approved'] },
   });
   res.json({ ok: true, month: ym, status: 'approved' });
+});
+
+// ── Manual trigger of the monthly prep cron ─────────────────
+// Useful when cron missed the window, or for forcing a fresh
+// snapshot of the prior month before approval. Runs the same logic
+// scheduler.js does on day 1 at 06:00 UTC.
+reportsRouter.post('/api/reports/run-prep', requireAdmin, async (_req, res) => {
+  try {
+    const r = await runMonthlyPrep();
+    res.json({ ok: true, ...r });
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
+});
+
+// ── Send the approved month via Resend ──────────────────────
+// Recipients: every active user with receives_monthly_email=true.
+// Partial-failure tolerant: returns per-recipient errors but only
+// flips status -> 'sent' if at least one recipient succeeded.
+reportsRouter.post('/api/reports/:yyyymm/send-email', requireAdmin, async (req, res) => {
+  const ym = String(req.params.yyyymm || '').trim();
+  if (!YYYYMM_RE.test(ym)) return res.status(400).json({ ok: false, error: 'Path must be YYYY-MM' });
+  try {
+    const r = await sendMonthlyReport({ month: ym, userId: req.user.id });
+    res.json(r);
+  } catch (e) {
+    res.status(500).json({ ok: false, error: e.message });
+  }
 });
 
 // ── JSON endpoint ───────────────────────────────────────────
