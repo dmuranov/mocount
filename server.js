@@ -25,6 +25,8 @@ import { reportsRouter } from './src/routes/reports.js';
 import { importRouter } from './src/routes/import.js';
 import { auditRouter } from './src/routes/audit.js';
 import { membersRouter } from './src/routes/members.js';
+import { slackRouter } from './src/routes/slack.js';
+import { startScheduler } from './src/jobs/scheduler.js';
 import { loadUser } from './src/auth/middleware.js';
 
 requireAuthEnv();
@@ -53,6 +55,8 @@ app.use(importRouter);
 app.use(auditRouter);
 // LVN members CRUD (admin) — group-of-phones inside an LVN-type number
 app.use(membersRouter);
+// Slack settings + test send (admin)
+app.use(slackRouter);
 
 // Health endpoint — pm2/Caddy/uptime monitors hit this.
 app.get('/api/health', (_req, res) => {
@@ -96,6 +100,7 @@ if (HAS_WEB_DIST) {
 
 app.listen(CONFIG.PORT, () => {
   console.log(`mocount listening on ${CONFIG.APP_URL} (port ${CONFIG.PORT}) — web=${HAS_WEB_DIST ? 'react' : 'vanilla'}`);
+  startScheduler();
 });
 
 // ── Inline HTML helpers ──────────────────────────────────────

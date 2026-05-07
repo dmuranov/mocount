@@ -7,13 +7,14 @@ import { NavLink, Outlet } from 'react-router-dom';
 import { useAuth } from './auth.jsx';
 
 const NAV = [
-  { to: '/',         label: 'Dashboard', adminOnly: false },
-  { to: '/numbers',  label: 'Numbers',   adminOnly: false },
-  { to: '/volumes',  label: 'Volumes',   adminOnly: true },
-  { to: '/history',  label: 'History',   adminOnly: false },
-  { to: '/reports',  label: 'Reports',   adminOnly: false },
-  { to: '/users',    label: 'Users',     adminOnly: true },
-  { to: '/audit',    label: 'Audit',     adminOnly: true },
+  { to: '/',                label: 'Dashboard', adminOnly: false },
+  { to: '/numbers',         label: 'Numbers',   adminOnly: false },
+  { to: '/volumes',         label: 'Volumes',   adminOnly: true },
+  { to: '/history',         label: 'History',   adminOnly: false },
+  { to: '/reports',         label: 'Reports',   adminOnly: false },
+  { to: '/users',           label: 'Users',     adminOnly: true },
+  { to: '/audit',           label: 'Audit',     adminOnly: true },
+  { to: '/settings/slack',  label: 'Slack',     adminOnly: true },
 ];
 
 export default function Layout() {
