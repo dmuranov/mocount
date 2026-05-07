@@ -18,3 +18,6 @@ test-import.xlsx
 test-volumes.xlsx
 test-combined.xlsx
 test-lvn.xlsx
+_inspect*.cjs
+_convert_google_margin.cjs
+mocount-import.xlsx
