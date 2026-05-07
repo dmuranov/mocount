@@ -11,6 +11,7 @@ import { CONFIG, requireAuthEnv } from './src/config.js';
 import { authRouter } from './src/routes/auth.js';
 import { usersRouter } from './src/routes/users.js';
 import { numbersRouter } from './src/routes/numbers.js';
+import { feesRouter } from './src/routes/fees.js';
 import { loadUser } from './src/auth/middleware.js';
 
 requireAuthEnv();
@@ -25,6 +26,8 @@ app.use(authRouter);
 app.use(usersRouter);
 // Numbers CRUD (auth read, admin write); UI lands in step 15
 app.use(numbersRouter);
+// Fees CRUD (auth read, admin write); UI lands in step 14 (NumberDetail)
+app.use(feesRouter);
 
 // Health endpoint — pm2/Caddy/uptime monitors hit this.
 app.get('/api/health', (_req, res) => {

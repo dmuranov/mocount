@@ -12,3 +12,4 @@ web/dist/
 .vscode/
 _bak/
 *.bak
+test-import.xlsx
