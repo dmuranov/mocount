@@ -24,6 +24,7 @@ import { historyRouter } from './src/routes/history.js';
 import { reportsRouter } from './src/routes/reports.js';
 import { importRouter } from './src/routes/import.js';
 import { auditRouter } from './src/routes/audit.js';
+import { membersRouter } from './src/routes/members.js';
 import { loadUser } from './src/auth/middleware.js';
 
 requireAuthEnv();
@@ -50,6 +51,8 @@ app.use(reportsRouter);
 app.use(importRouter);
 // Audit lookup (auth) — by-entity helpers; full /audit page lands in step 20
 app.use(auditRouter);
+// LVN members CRUD (admin) — group-of-phones inside an LVN-type number
+app.use(membersRouter);
 
 // Health endpoint — pm2/Caddy/uptime monitors hit this.
 app.get('/api/health', (_req, res) => {
