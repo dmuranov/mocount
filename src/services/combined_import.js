@@ -20,7 +20,7 @@ import { supabase } from '../supabase.js';
 import { auditLog } from '../util/audit.js';
 import { parseDate, parseBool, canonHeader } from '../util/xlsx_helpers.js';
 
-const VALID_TYPES = new Set(['SC', 'VLN']);
+const VALID_TYPES = new Set(['SC', 'LVN']);
 
 // Metadata + fee columns mirror the original numbers spreadsheet.
 // Volume columns (date, volume) added on the same row.
@@ -225,7 +225,7 @@ export async function parseAndAnalyze(buffer) {
 
     if (!existing) {
       // Creating a new number: type + prices required.
-      if (!VALID_TYPES.has(typeRaw)) errors.push({ idx: i, error: `Number "${bucket.number}" is new — type must be SC or VLN` });
+      if (!VALID_TYPES.has(typeRaw)) errors.push({ idx: i, error: `Number "${bucket.number}" is new — type must be SC or LVN` });
       else if (purchase === null) errors.push({ idx: i, error: `Number "${bucket.number}" is new — purchase_price required` });
       else if (selling === null) errors.push({ idx: i, error: `Number "${bucket.number}" is new — selling_price required` });
       else {

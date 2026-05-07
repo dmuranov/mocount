@@ -54,7 +54,7 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
   }
 
   // ── Per-number derived row (used by tabs 2/3/4) ──
-  // Sorted SC-then-VLN, then by number for stable diffing.
+  // Sorted SC-then-LVN, then by number for stable diffing.
   const sortedNumbers = [...numbersList].sort((a, b) => {
     if (a.type !== b.type) return a.type === 'SC' ? -1 : 1;
     return String(a.number).localeCompare(String(b.number));
@@ -148,7 +148,7 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
     net: r2(totalRevenue - totalCostFees),
   };
 
-  // ── Tab 2 — Per SC/VLN ──
+  // ── Tab 2 — Per SC/LVN ──
   const perNumberRows = perRow.map((r) => ({
     number: r.number,
     type: r.type,

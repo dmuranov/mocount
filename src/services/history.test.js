@@ -6,7 +6,7 @@ import { buildHistoryMatrix } from './history.js';
 const NUMS = [
   { id: 'sc1', number: '26220', type: 'SC',  country: 'ES', client: 'Acme', purchase_price_per_mo: 0.02, selling_price_per_mo: 0.04, active: true },
   { id: 'sc2', number: '25232', type: 'SC',  country: 'IT', client: 'Other', purchase_price_per_mo: 0.01, selling_price_per_mo: 0.05, active: true },
-  { id: 'vl1', number: 'V-001', type: 'VLN', country: 'ES', client: 'Acme', purchase_price_per_mo: 0.005, selling_price_per_mo: 0.015, active: true },
+  { id: 'vl1', number: 'V-001', type: 'LVN', country: 'ES', client: 'Acme', purchase_price_per_mo: 0.005, selling_price_per_mo: 0.015, active: true },
 ];
 
 test('past month: full month, both sections, totals', () => {
@@ -24,11 +24,11 @@ test('past month: full month, both sections, totals', () => {
   assert.equal(r.isCurrent, false);
   assert.equal(r.days.length, 30);
   assert.equal(r.sections.SC.rows.length, 2);
-  assert.equal(r.sections.VLN.rows.length, 1);
+  assert.equal(r.sections.LVN.rows.length, 1);
   assert.equal(r.sections.SC.totals.volume, 3500);
   assert.equal(r.sections.SC.totals.revenue, 80);   // 1000*0.02 + 2000*0.02 + 500*0.04 = 20+40+20 = 80
-  assert.equal(r.sections.VLN.totals.volume, 10000);
-  assert.equal(r.sections.VLN.totals.revenue, 100); // 10000 * 0.01 = 100
+  assert.equal(r.sections.LVN.totals.volume, 10000);
+  assert.equal(r.sections.LVN.totals.revenue, 100); // 10000 * 0.01 = 100
   assert.equal(r.grandTotal.volume, 13500);
   assert.equal(r.grandTotal.revenue, 180);
 });
@@ -73,7 +73,7 @@ test('client filter narrows numbers and totals', () => {
   });
   assert.equal(r.sections.SC.rows.length, 1); // sc1 only
   assert.equal(r.sections.SC.totals.volume, 1000);
-  assert.equal(r.sections.VLN.rows.length, 1); // vl1 also Acme
+  assert.equal(r.sections.LVN.rows.length, 1); // vl1 also Acme
   assert.equal(r.grandTotal.volume, 1000);
 });
 

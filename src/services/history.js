@@ -1,6 +1,6 @@
 // History matrix — SPEC §4 (History page) + §14 step 10.
 //
-// Builds the SC/VLN-sectioned grid used by the History page and its
+// Builds the SC/LVN-sectioned grid used by the History page and its
 // xlsx export. Pure function: caller does the DB pulls and feeds in
 // numbers + volumes (DB scoping happens in the route).
 //
@@ -83,9 +83,9 @@ export function buildHistoryMatrix({
     return true;
   });
 
-  // Index numbers by id, and bucket per type (SC / VLN).
+  // Index numbers by id, and bucket per type (SC / LVN).
   const byId = new Map(filtered.map((n) => [n.id, n]));
-  const sectionsTypes = ['SC', 'VLN'];
+  const sectionsTypes = ['SC', 'LVN'];
   const byType = new Map(sectionsTypes.map((t) => [t, []]));
   for (const n of filtered) {
     if (byType.has(n.type)) byType.get(n.type).push(n);

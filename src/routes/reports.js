@@ -93,7 +93,7 @@ reportsRouter.get('/api/reports/:yyyymm/xlsx', requireAuth, async (req, res) => 
     sumRows.push({ Section: 'NET', Label: '', Amount: r.summary.net });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(sumRows, { header: ['Section', 'Label', 'Amount'] }), 'Summary');
 
-    // ── Tab 2: Per SC/VLN ─────────────────────────────────
+    // ── Tab 2: Per SC/LVN ─────────────────────────────────
     const t2Rows = r.perNumber.rows.map((row) => ({
       Number: row.number,
       type: row.type,
@@ -107,7 +107,7 @@ reportsRouter.get('/api/reports/:yyyymm/xlsx', requireAuth, async (req, res) => 
     t2Rows.push({ Number: 'TOTAL', volume: r.perNumber.totals.volume, revenue: r.perNumber.totals.revenue });
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(t2Rows, {
       header: ['Number', 'type', 'country', 'client', 'volume', 'margin', 'revenue'],
-    }), 'Per SC-VLN');
+    }), 'Per SC-LVN');
 
     // ── Tab 3: Costs ──────────────────────────────────────
     const t3Rows = r.costs.rows.map((row) => ({

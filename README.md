@@ -1,6 +1,6 @@
 # mocount
 
-SC/VLN message-volume + cost tracker. Daily volumes in, monthly P&L out.
+SC/LVN message-volume + cost tracker. Daily volumes in, monthly P&L out.
 
 ## Stack
 

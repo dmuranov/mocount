@@ -6,7 +6,7 @@ import { buildMonthReport } from './reports.js';
 const NUMS = [
   { id: 'n1', number: '26220', type: 'SC',  country: 'ES', client: 'Acme',  purchase_price_per_mo: 0.02, selling_price_per_mo: 0.04 },
   { id: 'n2', number: '25232', type: 'SC',  country: 'IT', client: 'Acme',  purchase_price_per_mo: 0.01, selling_price_per_mo: 0.05 },
-  { id: 'n3', number: 'V-001', type: 'VLN', country: 'ES', client: 'Other', purchase_price_per_mo: 0.005, selling_price_per_mo: 0.015 },
+  { id: 'n3', number: 'V-001', type: 'LVN', country: 'ES', client: 'Other', purchase_price_per_mo: 0.005, selling_price_per_mo: 0.015 },
   { id: 'n4', number: 'X-999', type: 'SC',  country: 'FR', client: null,    purchase_price_per_mo: 0.02, selling_price_per_mo: 0.03 },
 ];
 const VOLS = [
@@ -47,7 +47,7 @@ test('summary debit lines: cost_monthly before cost_setup, sorted by number', ()
   assert.equal(r.summary.debit.total, 280);
 });
 
-test('Tab 2 perNumber: SC before VLN, then by number, with totals', () => {
+test('Tab 2 perNumber: SC before LVN, then by number, with totals', () => {
   const r = buildMonthReport({ numbers: NUMS, volumes: VOLS, fees: FEES, month: '2026-04' });
   const rows = r.perNumber.rows;
   assert.deepEqual(rows.map((x) => x.number), ['25232', '26220', 'X-999', 'V-001']);

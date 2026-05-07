@@ -11,7 +11,7 @@ import { auditLog, diffShallow } from '../util/audit.js';
 
 export const numbersRouter = express.Router();
 
-const VALID_TYPES = new Set(['SC', 'VLN']);
+const VALID_TYPES = new Set(['SC', 'LVN']);
 
 function normNumber(s) {
   return String(s || '').trim();
@@ -76,7 +76,7 @@ numbersRouter.post('/api/numbers', requireAdmin, async (req, res) => {
     const number = normNumber(req.body?.number);
     if (!number) return res.status(400).json({ ok: false, error: 'number is required' });
     const type = String(req.body?.type || '').trim().toUpperCase();
-    if (!VALID_TYPES.has(type)) return res.status(400).json({ ok: false, error: 'type must be SC or VLN' });
+    if (!VALID_TYPES.has(type)) return res.status(400).json({ ok: false, error: 'type must be SC or LVN' });
     const country = normCountry(req.body?.country);
     const client = (String(req.body?.client ?? '').trim()) || null;
     const purchase = normPrice(req.body?.purchase_price_per_mo, 'purchase_price_per_mo');
@@ -134,7 +134,7 @@ numbersRouter.patch('/api/numbers/:id', requireAdmin, async (req, res) => {
     }
     if (req.body?.type !== undefined) {
       const t = String(req.body.type).trim().toUpperCase();
-      if (!VALID_TYPES.has(t)) return res.status(400).json({ ok: false, error: 'type must be SC or VLN' });
+      if (!VALID_TYPES.has(t)) return res.status(400).json({ ok: false, error: 'type must be SC or LVN' });
       patch.type = t;
     }
     if (req.body?.country !== undefined) patch.country = normCountry(req.body.country);

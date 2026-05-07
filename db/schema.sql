@@ -24,11 +24,13 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_active_email ON users(active, email);
 
 -- ── numbers ─────────────────────────────────────────────────
--- One row per SC or VLN. margin = selling - purchase, derived not stored.
+-- One row per SC or LVN group. margin = selling - purchase, derived not stored.
+-- LVN rows represent a *group* of phone numbers sharing pricing —
+-- the individual phones live in lvn_members below.
 CREATE TABLE IF NOT EXISTS numbers (
   id                      uuid           PRIMARY KEY DEFAULT gen_random_uuid(),
   number                  text           UNIQUE NOT NULL,
-  type                    text           NOT NULL CHECK (type IN ('SC','VLN')),
+  type                    text           NOT NULL CHECK (type IN ('SC','LVN')),
   country                 text,
   client                  text,
   purchase_price_per_mo   numeric(10,4)  NOT NULL,
@@ -78,12 +80,29 @@ CREATE TABLE IF NOT EXISTS fees (
   created_by      uuid           REFERENCES users(id) ON DELETE SET NULL
 );
 
--- Idempotent on a fresh DB; existing DBs need a one-time migration —
--- see db/migrations/2026-05-07_fees_yearly.sql for the live update.
+-- Idempotent on a fresh DB; existing DBs need one-time migrations —
+-- see db/migrations/ for the live updates.
 DO $$ BEGIN
   ALTER TABLE fees DROP CONSTRAINT IF EXISTS fees_type_check;
   ALTER TABLE fees ADD CONSTRAINT fees_type_check CHECK (type IN ('monthly','yearly','setup'));
+  ALTER TABLE numbers DROP CONSTRAINT IF EXISTS numbers_type_check;
+  ALTER TABLE numbers ADD CONSTRAINT numbers_type_check CHECK (type IN ('SC','LVN'));
 END $$;
+
+-- ── lvn_members ─────────────────────────────────────────────
+-- Individual phone numbers inside an LVN group. Service layer
+-- enforces parent.type='LVN'. Soft-deleted via active=false so
+-- audit references remain intact.
+CREATE TABLE IF NOT EXISTS lvn_members (
+  id          uuid          PRIMARY KEY DEFAULT gen_random_uuid(),
+  number_id   uuid          NOT NULL REFERENCES numbers(id) ON DELETE CASCADE,
+  phone       text          NOT NULL,
+  active      boolean       NOT NULL DEFAULT true,
+  created_at  timestamptz   NOT NULL DEFAULT now(),
+  created_by  uuid          REFERENCES users(id) ON DELETE SET NULL,
+  UNIQUE (number_id, phone)
+);
+CREATE INDEX IF NOT EXISTS idx_lvn_members_number_id ON lvn_members(number_id);
 CREATE INDEX IF NOT EXISTS idx_fees_number_side_type ON fees(number_id, side, type);
 CREATE INDEX IF NOT EXISTS idx_fees_effective ON fees(effective_from, effective_to);
 
