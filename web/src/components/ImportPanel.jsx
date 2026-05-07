@@ -23,6 +23,9 @@ export default function ImportPanel({ open, onClose, onDone, endpoint, title, su
   const [result, setResult] = useState(null);
   const [error, setError] = useState(null);
   const [filename, setFilename] = useState('');
+  // Hold the actual File object — the <input> unmounts during the
+  // PREVIEW phase, so a ref to it goes null on commit.
+  const [picked, setPicked] = useState(null);
   const fileRef = useRef(null);
 
   if (!open) return null;
@@ -33,12 +36,14 @@ export default function ImportPanel({ open, onClose, onDone, endpoint, title, su
     setResult(null);
     setError(null);
     setFilename('');
+    setPicked(null);
     if (fileRef.current) fileRef.current.value = '';
   }
 
   async function onFilePicked(e) {
     const f = e.target.files?.[0];
     if (!f) return;
+    setPicked(f);
     setFilename(f.name);
     setError(null);
     const fd = new FormData();
@@ -58,10 +63,9 @@ export default function ImportPanel({ open, onClose, onDone, endpoint, title, su
     setPhase(STATE_COMMITTING);
     setError(null);
     try {
-      const f = fileRef.current?.files?.[0];
-      if (!f) throw new Error('Lost file reference — please pick again');
+      if (!picked) throw new Error('Lost file reference — please pick again');
       const fd = new FormData();
-      fd.append('file', f);
+      fd.append('file', picked);
       const res = await fetch(`${endpoint}?dryRun=false`, { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);

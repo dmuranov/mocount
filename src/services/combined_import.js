@@ -68,13 +68,13 @@ const FEE_GROUPS = [
   ['sale_setup_fee',   'sale_setup_date',   'sale', 'setup'],
 ];
 
-function readSheet(buffer) {
+function readWorkbook(buffer) {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const sheetName = wb.SheetNames[0];
-  if (!sheetName) return { rows: [], headerMap: {} };
+  if (!sheetName) return { wb, rows: [], headerMap: {} };
   const sheet = wb.Sheets[sheetName];
   const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
-  if (!aoa.length) return { rows: [], headerMap: {} };
+  if (!aoa.length) return { wb, rows: [], headerMap: {} };
 
   const headerRow = aoa[0];
   const headerMap = {};
@@ -89,7 +89,30 @@ function readSheet(buffer) {
     if (!r || r.every((c) => c === '' || c == null)) continue;
     rows.push(r);
   }
-  return { rows, headerMap };
+  return { wb, rows, headerMap };
+}
+
+// Phone validation matches the LVN members API (digits + optional +).
+const PHONE_RE = /^\+?\d{6,20}$/;
+
+// Read a member tab: take column A, coerce to string, drop empty
+// cells and obvious header rows. Anything that doesn't validate as
+// a phone is silently skipped (covers "Phone" headers without
+// failing the import on stray label cells).
+function readMemberTab(wb, tabName) {
+  const sheet = wb.Sheets[tabName];
+  if (!sheet) return null;
+  const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
+  const phones = [];
+  for (const row of aoa) {
+    if (!row || !row.length) continue;
+    const cell = row[0];
+    if (cell === null || cell === undefined || cell === '') continue;
+    const s = String(cell).trim();
+    if (!PHONE_RE.test(s)) continue;
+    phones.push(s);
+  }
+  return phones;
 }
 
 function getCell(row, headerMap, key) {
@@ -121,11 +144,13 @@ function asVolume(v) {
 
 // ── parseAndAnalyze ─────────────────────────────────────────
 export async function parseAndAnalyze(buffer) {
-  const { rows, headerMap } = readSheet(buffer);
+  const { wb, rows, headerMap } = readWorkbook(buffer);
 
+  const emptyMembers = { toCreate: [], toDeactivate: [], warnings: [] };
   if (!('number' in headerMap)) {
     return {
       toCreate: [], toUpdate: [], feesToCreate: [], volumesToUpsert: [],
+      members: emptyMembers,
       errors: [{ idx: -1, error: "Missing required column 'number'" }],
       closedMonths: [], totalRows: rows.length,
     };
@@ -195,6 +220,7 @@ export async function parseAndAnalyze(buffer) {
     if (error) {
       return {
         toCreate: [], toUpdate: [], feesToCreate: [], volumesToUpsert: [],
+        members: emptyMembers,
         errors: [{ idx: -1, error: 'Existing-numbers lookup failed: ' + error.message }],
         closedMonths: [], totalRows: rows.length,
       };
@@ -206,12 +232,15 @@ export async function parseAndAnalyze(buffer) {
   const toUpdate = [];
   const feesToCreate = [];
   const volumesToUpsert = [];
+  const lvnBucketsByNumber = new Map(); // number -> bucket  (LVN parents only)
 
   for (const bucket of byNumber.values()) {
     const meta = bucket.metaRow;
     const i = bucket.metaIdx;
 
     const typeRaw = String(getCell(meta, headerMap, 'type') ?? '').trim().toUpperCase();
+    const existingType = existingByNumber.get(bucket.number)?.type;
+    if (typeRaw === 'LVN' || existingType === 'LVN') lvnBucketsByNumber.set(bucket.number, bucket);
     const countryRaw = getCell(meta, headerMap, 'country');
     const country = countryRaw == null || countryRaw === '' ? null : String(countryRaw).trim().toUpperCase();
     const clientRaw = getCell(meta, headerMap, 'client');
@@ -273,6 +302,7 @@ export async function parseAndAnalyze(buffer) {
     if (error) {
       return {
         toCreate: [], toUpdate: [], feesToCreate: [], volumesToUpsert: [],
+        members: emptyMembers,
         errors: [{ idx: -1, error: 'Closed-month check failed: ' + error.message }],
         closedMonths: [], totalRows: rows.length,
       };
@@ -293,7 +323,86 @@ export async function parseAndAnalyze(buffer) {
     }
   }
 
-  return { toCreate, toUpdate, feesToCreate, volumesToUpsert, errors, closedMonths, totalRows: rows.length };
+  // ── Members pass ──
+  // For every LVN parent (existing or new), look for a sheet with the
+  // SAME name as the parent number. Read column A, validate as phones,
+  // then diff against the DB members for existing parents. Missing
+  // tabs become warnings, not errors — the LVN row still imports.
+  const memberToCreate = [];      // [{ number, phone, reactivate_id? }]
+  const memberToDeactivate = [];  // [{ number, phone, member_id }]
+  const memberWarnings = [];
+
+  if (lvnBucketsByNumber.size) {
+    // Fetch current active+inactive members for every existing LVN parent
+    // in one round trip.
+    const lvnIdsForLookup = [];
+    for (const bucket of lvnBucketsByNumber.values()) {
+      const ex = existingByNumber.get(bucket.number);
+      if (ex) lvnIdsForLookup.push(ex.id);
+    }
+    const memberByParent = new Map(); // parent_id -> [{id, phone, active}]
+    if (lvnIdsForLookup.length) {
+      const { data, error } = await supabase()
+        .from('lvn_members').select('id, number_id, phone, active')
+        .in('number_id', lvnIdsForLookup);
+      if (error) {
+        return {
+          toCreate, toUpdate, feesToCreate, volumesToUpsert,
+          members: emptyMembers,
+          errors: [{ idx: -1, error: 'Existing-members lookup failed: ' + error.message }],
+          closedMonths, totalRows: rows.length,
+        };
+      }
+      for (const m of data || []) {
+        if (!memberByParent.has(m.number_id)) memberByParent.set(m.number_id, []);
+        memberByParent.get(m.number_id).push(m);
+      }
+    }
+
+    for (const [number, bucket] of lvnBucketsByNumber.entries()) {
+      const tabName = number; // convention: parent's Number == tab name
+      const sheetPhones = readMemberTab(wb, tabName);
+      if (sheetPhones === null) {
+        memberWarnings.push(`${tabName}: no member tab found, group imported with 0 members. Add VLNs from the UI later.`);
+        continue;
+      }
+
+      const existing = existingByNumber.get(number);
+      if (!existing) {
+        // New LVN — every sheet phone becomes a fresh insert.
+        for (const phone of sheetPhones) memberToCreate.push({ number, phone });
+        continue;
+      }
+
+      const cur = memberByParent.get(existing.id) || [];
+      const dbActiveByPhone = new Map();
+      const dbInactiveByPhone = new Map();
+      for (const m of cur) {
+        if (m.active) dbActiveByPhone.set(m.phone, m.id);
+        else dbInactiveByPhone.set(m.phone, m.id);
+      }
+      const sheetSet = new Set(sheetPhones);
+
+      // In sheet, not active in DB → create or reactivate.
+      for (const phone of sheetPhones) {
+        if (dbActiveByPhone.has(phone)) continue;
+        const reactivate_id = dbInactiveByPhone.get(phone) || null;
+        memberToCreate.push({ number, phone, ...(reactivate_id ? { reactivate_id } : {}) });
+      }
+      // Active in DB, not in sheet → deactivate.
+      for (const [phone, member_id] of dbActiveByPhone.entries()) {
+        if (!sheetSet.has(phone)) {
+          memberToDeactivate.push({ number, phone, member_id });
+        }
+      }
+    }
+  }
+
+  return {
+    toCreate, toUpdate, feesToCreate, volumesToUpsert,
+    members: { toCreate: memberToCreate, toDeactivate: memberToDeactivate, warnings: memberWarnings },
+    errors, closedMonths, totalRows: rows.length,
+  };
 }
 
 // ── commitImport ────────────────────────────────────────────
@@ -338,6 +447,8 @@ export async function commitImport(buffer, userId) {
     ...plan.toUpdate.map((u) => u.number),
     ...plan.feesToCreate.map((f) => f.number),
     ...plan.volumesToUpsert.map((v) => v.number),
+    ...(plan.members?.toCreate || []).map((m) => m.number),
+    ...(plan.members?.toDeactivate || []).map((m) => m.number),
   ];
   const uniqueNumbers = [...new Set(allNumbers)];
   const idByNumber = new Map();
@@ -418,11 +529,70 @@ export async function commitImport(buffer, userId) {
     }
   }
 
+  // 6) Members: insert/reactivate/deactivate.
+  let membersAdded = 0, membersDeactivated = 0;
+  if (plan.members) {
+    for (const m of plan.members.toCreate || []) {
+      const number_id = idByNumber.get(m.number);
+      if (!number_id) continue;
+      if (m.reactivate_id) {
+        const { error } = await sb.from('lvn_members').update({ active: true }).eq('id', m.reactivate_id);
+        if (error) return { ok: false, error: `Reactivate ${m.phone} failed: ${error.message}` };
+        membersAdded++;
+        await auditLog({
+          userId, action: 'lvn_member.add', entity: 'lvn_member', entityId: m.reactivate_id,
+          diff: { source: 'xlsx_import', number_id, phone: m.phone, source_action: 'reactivate' },
+        });
+      } else {
+        const { data, error } = await sb.from('lvn_members')
+          .insert({ number_id, phone: m.phone, active: true, created_by: userId })
+          .select('id').maybeSingle();
+        if (error) {
+          // Race or duplicate: fall through to a best-effort upsert by
+          // setting active=true on the unique row.
+          if (error.code === '23505') {
+            const { data: existed } = await sb.from('lvn_members')
+              .select('id').eq('number_id', number_id).eq('phone', m.phone).maybeSingle();
+            if (existed) {
+              await sb.from('lvn_members').update({ active: true }).eq('id', existed.id);
+              membersAdded++;
+              await auditLog({
+                userId, action: 'lvn_member.add', entity: 'lvn_member', entityId: existed.id,
+                diff: { source: 'xlsx_import', number_id, phone: m.phone, source_action: 'reactivate-on-conflict' },
+              });
+              continue;
+            }
+          }
+          return { ok: false, error: `Member insert ${m.phone} failed: ${error.message}` };
+        }
+        membersAdded++;
+        await auditLog({
+          userId, action: 'lvn_member.add', entity: 'lvn_member', entityId: data.id,
+          diff: { source: 'xlsx_import', number_id, phone: m.phone },
+        });
+      }
+    }
+    for (const m of plan.members.toDeactivate || []) {
+      const { error } = await sb.from('lvn_members').update({ active: false }).eq('id', m.member_id);
+      if (error) return { ok: false, error: `Deactivate ${m.phone} failed: ${error.message}` };
+      membersDeactivated++;
+      await auditLog({
+        userId, action: 'lvn_member.remove', entity: 'lvn_member', entityId: m.member_id,
+        diff: { source: 'xlsx_import', phone: m.phone, active: [true, false] },
+      });
+    }
+  }
+
   return {
     ok: true,
     numbers: { created: createdN, updated: updatedN },
     fees: feesN,
     volumes: { written: volumesWritten, changed: volumesChanged, unchanged: volumesUnchanged },
+    members: {
+      added: membersAdded,
+      deactivated: membersDeactivated,
+      warnings: plan.members?.warnings || [],
+    },
     errors: plan.errors,
     closedMonths: plan.closedMonths,
   };

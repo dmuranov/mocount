@@ -232,9 +232,19 @@ export default function Dashboard() {
             <li>Numbers to update: <b>{p.toUpdate?.length ?? 0}</b></li>
             <li>Fees to create: <b>{p.feesToCreate?.length ?? 0}</b></li>
             <li>Volumes to upsert: <b>{p.volumesToUpsert?.length ?? 0}</b></li>
+            <li>VLN members to add: <b>{p.members?.toCreate?.length ?? 0}</b></li>
+            <li>VLN members to remove: <b>{p.members?.toDeactivate?.length ?? 0}</b></li>
             <li>Errors: <b>{p.errors?.length ?? 0}</b></li>
             {p.closedMonths?.length > 0 && (
               <li style={{ color: 'var(--danger-fg)' }}>Closed months in file: {p.closedMonths.join(', ')}</li>
+            )}
+            {p.members?.warnings?.length > 0 && (
+              <li style={{ color: 'var(--danger-fg)' }}>
+                <details open>
+                  <summary>Member warnings ({p.members.warnings.length})</summary>
+                  <pre className="result-pre">{p.members.warnings.join('\n')}</pre>
+                </details>
+              </li>
             )}
             {p.errors?.length > 0 && (
               <li style={{ color: 'var(--danger-fg)' }}>
