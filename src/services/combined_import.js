@@ -190,6 +190,11 @@ export async function parseAndAnalyze(buffer) {
     }
 
     // Fee declarations only from the first row of this number.
+    // Filled amount + missing date defaults to 2020-01-01 (an
+    // "always-on" anchor far enough back to predate any imports).
+    // For yearly/setup that means charged in Jan-of-anniversary or
+    // never (past month) — see SPEC §3 fee resolution for details.
+    // Filled date + missing amount is an error (date alone is meaningless).
     if (i === bucket.metaIdx) {
       for (const [amtKey, dateKey, side, type] of FEE_GROUPS) {
         const amtRaw = getCell(r, headerMap, amtKey);
@@ -197,15 +202,25 @@ export async function parseAndAnalyze(buffer) {
         const hasAmt = amtRaw !== undefined && amtRaw !== '' && amtRaw !== null;
         const hasD = dRaw !== undefined && dRaw !== '' && dRaw !== null;
         if (!hasAmt && !hasD) continue;
-        if (!hasAmt || !hasD) {
-          errors.push({ idx: i, error: `${amtKey}/${dateKey} must both be filled or both empty` });
+        if (!hasAmt) {
+          errors.push({ idx: i, error: `${dateKey} set without ${amtKey} — fill the amount or clear both` });
           continue;
         }
         const amount = asAmount(amtRaw);
-        const date = parseDate(dRaw);
-        if (amount === null) errors.push({ idx: i, error: `Invalid ${amtKey} "${amtRaw}"` });
-        else if (!date) errors.push({ idx: i, error: `Invalid ${dateKey} "${dRaw}"` });
-        else bucket.feeDecls.push({ side, type, amount, effective_from: date });
+        if (amount === null) {
+          errors.push({ idx: i, error: `Invalid ${amtKey} "${amtRaw}"` });
+          continue;
+        }
+        let date = '2020-01-01';
+        if (hasD) {
+          const parsed = parseDate(dRaw);
+          if (!parsed) {
+            errors.push({ idx: i, error: `Invalid ${dateKey} "${dRaw}"` });
+            continue;
+          }
+          date = parsed;
+        }
+        bucket.feeDecls.push({ side, type, amount, effective_from: date });
       }
     }
   }
