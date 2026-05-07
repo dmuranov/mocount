@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useAuth } from '../auth.jsx';
+import LvnMembers from './LvnMembers.jsx';
 
 // Cost-side first (what we pay supplier), then sale-side (what we
 // charge client). "Setup" is one-off, charged in the calendar month
@@ -262,6 +263,11 @@ export default function NumberDrawer({ numberId, onClose, onChanged }) {
                 </div>
               )}
             </section>
+
+            {/* LVN members — only for LVN-type parents */}
+            {num.type === 'LVN' && (
+              <LvnMembers numberId={numberId} onChanged={onChanged} />
+            )}
 
             {/* Fee buckets */}
             {BUCKETS.map((b) => (

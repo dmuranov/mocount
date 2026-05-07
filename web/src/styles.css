@@ -491,6 +491,27 @@ label.tick {
 .fee-add input[type="number"] { width: 110px; }
 .fee-add input[type="date"] { width: 150px; }
 
+/* LVN members list */
+.member-list {
+  list-style: none;
+  padding: 0;
+  margin: 8px 0;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  overflow: hidden;
+}
+.member-row {
+  display: grid;
+  grid-template-columns: 1fr auto auto;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  font-size: 13px;
+}
+.member-row:last-child { border-bottom: none; }
+.member-row.inactive { opacity: 0.55; }
+
 /* Audit list */
 .audit-list {
   list-style: none;
