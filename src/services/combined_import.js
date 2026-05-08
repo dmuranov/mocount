@@ -56,7 +56,20 @@ const HEADER_ALIASES = new Map(Object.entries({
   vol: 'volume',
   count: 'volume',
   messages: 'volume',
+  month: 'month',
 }));
+
+// Day-of-month column headers like "1st", "2nd", "5th", "31"
+// (with or without ordinal suffix). Lets you upload a sheet whose
+// columns mirror a calendar month (one cell per day) without having
+// to flatten it to (number, date, volume) rows by hand.
+const DAY_HEADER_RE = /^(\d{1,2})(st|nd|rd|th)?$/;
+function parseDayHeader(canon) {
+  const m = String(canon || '').match(DAY_HEADER_RE);
+  if (!m) return null;
+  const d = Number(m[1]);
+  return d >= 1 && d <= 31 ? d : null;
+}
 
 // Fee column groups: each tuple = [amountKey, dateKey, side, type].
 const FEE_GROUPS = [
@@ -71,17 +84,20 @@ const FEE_GROUPS = [
 function readWorkbook(buffer) {
   const wb = XLSX.read(buffer, { type: 'buffer', cellDates: true });
   const sheetName = wb.SheetNames[0];
-  if (!sheetName) return { wb, rows: [], headerMap: {} };
+  if (!sheetName) return { wb, rows: [], headerMap: {}, dayCols: {} };
   const sheet = wb.Sheets[sheetName];
   const aoa = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: '', raw: true });
-  if (!aoa.length) return { wb, rows: [], headerMap: {} };
+  if (!aoa.length) return { wb, rows: [], headerMap: {}, dayCols: {} };
 
   const headerRow = aoa[0];
   const headerMap = {};
+  const dayCols = {}; // day number (1..31) -> col index
   for (let i = 0; i < headerRow.length; i++) {
     const canon = canonHeader(headerRow[i]);
     const mapped = HEADER_ALIASES.get(canon);
     if (mapped) headerMap[mapped] = i;
+    const day = parseDayHeader(canon);
+    if (day !== null) dayCols[day] = i;
   }
   const rows = [];
   for (let i = 1; i < aoa.length; i++) {
@@ -89,7 +105,13 @@ function readWorkbook(buffer) {
     if (!r || r.every((c) => c === '' || c == null)) continue;
     rows.push(r);
   }
-  return { wb, rows, headerMap };
+  return { wb, rows, headerMap, dayCols };
+}
+
+function pad2(n) { return String(n).padStart(2, '0'); }
+function defaultCurrentMonth() {
+  const d = new Date();
+  return `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}`;
 }
 
 // Phone validation matches the LVN members API (digits + optional +).
@@ -144,7 +166,7 @@ function asVolume(v) {
 
 // ── parseAndAnalyze ─────────────────────────────────────────
 export async function parseAndAnalyze(buffer) {
-  const { wb, rows, headerMap } = readWorkbook(buffer);
+  const { wb, rows, headerMap, dayCols } = readWorkbook(buffer);
 
   const emptyMembers = { toCreate: [], toDeactivate: [], warnings: [] };
   if (!('number' in headerMap)) {
@@ -155,6 +177,10 @@ export async function parseAndAnalyze(buffer) {
       closedMonths: [], totalRows: rows.length,
     };
   }
+
+  // Default month for day-of-month columns (no per-row 'month' override).
+  const fallbackMonth = defaultCurrentMonth();
+  const dayColEntries = Object.entries(dayCols);
 
   // Pass 1: bucket rows by canonical number, parse cells, produce
   // per-row issues we want to surface in the preview.
@@ -186,6 +212,31 @@ export async function parseAndAnalyze(buffer) {
         if (!date) errors.push({ idx: i, error: `Invalid date "${dateRaw}"` });
         else if (volume === null) errors.push({ idx: i, error: `Invalid volume "${volRaw}" (must be non-negative integer)` });
         else bucket.volumes.push({ idx: i, date, volume });
+      }
+    }
+
+    // Day-of-month columns ("1st", "5th", "31st", ...): each cell is
+    // that day's volume. Month comes from a per-row `month` cell if
+    // set (YYYY-MM), else current calendar month.
+    if (dayColEntries.length) {
+      const monthRaw = getCell(r, headerMap, 'month');
+      let monthForRow = fallbackMonth;
+      if (monthRaw !== undefined && monthRaw !== null && monthRaw !== '') {
+        const s = String(monthRaw).trim();
+        if (/^\d{4}-\d{2}$/.test(s)) monthForRow = s;
+        else { errors.push({ idx: i, error: `Invalid month "${s}" (expected YYYY-MM)` }); }
+      }
+      for (const [dayStr, colIdx] of dayColEntries) {
+        const cell = r[colIdx];
+        if (cell === '' || cell === null || cell === undefined) continue;
+        const v = asVolume(cell);
+        if (v === null) {
+          errors.push({ idx: i, error: `Invalid volume "${cell}" on day ${dayStr}` });
+          continue;
+        }
+        if (v === 0) continue; // zero-volume days don't need rows
+        const date = `${monthForRow}-${pad2(Number(dayStr))}`;
+        bucket.volumes.push({ idx: i, date, volume: v });
       }
     }
 
@@ -253,6 +304,12 @@ export async function parseAndAnalyze(buffer) {
     const meta = bucket.metaRow;
     const i = bucket.metaIdx;
 
+    // hasCol(k) tells us "this column appeared in the spreadsheet at all".
+    // Critical for the update path: a missing column must mean
+    // "leave the field alone", NOT "set it to null". The latter wiped
+    // 38 numbers' country/client when a volumes-only file was uploaded.
+    const hasCol = (k) => k in headerMap;
+
     const typeRaw = String(getCell(meta, headerMap, 'type') ?? '').trim().toUpperCase();
     const existingType = existingByNumber.get(bucket.number)?.type;
     if (typeRaw === 'LVN' || existingType === 'LVN') lvnBucketsByNumber.set(bucket.number, bucket);
@@ -284,14 +341,15 @@ export async function parseAndAnalyze(buffer) {
         });
       }
     } else {
-      // Updating an existing number: only fields that diverge make the patch.
+      // Updating an existing number: only fields that (a) the file
+      // actually has a column for AND (b) diverge from the DB.
       const patch = {};
-      if (typeRaw && VALID_TYPES.has(typeRaw) && typeRaw !== existing.type) patch.type = typeRaw;
-      if (country !== undefined && country !== existing.country) patch.country = country;
-      if (client !== undefined && client !== existing.client) patch.client = client;
-      if (purchase !== null && Number(existing.purchase_price_per_mo) !== purchase) patch.purchase_price_per_mo = purchase;
-      if (selling !== null && Number(existing.selling_price_per_mo) !== selling) patch.selling_price_per_mo = selling;
-      if (activeParsed !== null && activeParsed !== existing.active) patch.active = activeParsed;
+      if (hasCol('type') && typeRaw && VALID_TYPES.has(typeRaw) && typeRaw !== existing.type) patch.type = typeRaw;
+      if (hasCol('country') && country !== existing.country) patch.country = country;
+      if (hasCol('client')  && client  !== existing.client)  patch.client  = client;
+      if (hasCol('purchase_price') && purchase !== null && Number(existing.purchase_price_per_mo) !== purchase) patch.purchase_price_per_mo = purchase;
+      if (hasCol('selling_price') && selling !== null && Number(existing.selling_price_per_mo) !== selling) patch.selling_price_per_mo = selling;
+      if (hasCol('active') && activeParsed !== null && activeParsed !== existing.active) patch.active = activeParsed;
       if (Object.keys(patch).length) {
         toUpdate.push({ id: existing.id, number: bucket.number, patch });
       }
