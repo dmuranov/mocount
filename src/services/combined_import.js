@@ -574,13 +574,22 @@ export async function commitImport(buffer, userId) {
     if (priorErr) return { ok: false, error: priorErr.message };
     const priorMap = new Map((prior || []).map((p) => [`${p.number_id}|${p.date}`, Number(p.volume)]));
 
+    // Dedupe by (number_id, date) — last write wins. The Postgres
+    // upsert refuses if two rows in the same chunk share the conflict
+    // key, and a sheet that lists the same number twice (or has both
+    // a date+volume pair AND a day-of-month col for the same day)
+    // will produce duplicates here.
     const nowIso = new Date().toISOString();
-    const upsertRows = [];
+    const dedupedMap = new Map(); // 'number_id|date' -> upsert row
     for (const v of plan.volumesToUpsert) {
       const number_id = idByNumber.get(v.number);
       if (!number_id) continue;
-      upsertRows.push({ number_id, date: v.date, volume: v.volume, entered_by: userId, entered_at: nowIso });
+      dedupedMap.set(
+        `${number_id}|${v.date}`,
+        { number_id, date: v.date, volume: v.volume, entered_by: userId, entered_at: nowIso }
+      );
     }
+    const upsertRows = [...dedupedMap.values()];
     for (let i = 0; i < upsertRows.length; i += 500) {
       const chunk = upsertRows.slice(i, i + 500);
       const { error } = await sb.from('daily_volumes').upsert(chunk, { onConflict: 'number_id,date' });
