@@ -43,6 +43,7 @@ export default function Dashboard() {
 
   const [importOpen, setImportOpen] = useState(false);
   const [moImportOpen, setMoImportOpen] = useState(false);
+  const [priceSyncOpen, setPriceSyncOpen] = useState(false);
   const [drawerId, setDrawerId] = useState(null);
 
   async function loadAll(thisDate) {
@@ -141,6 +142,7 @@ export default function Dashboard() {
           <div className="dash-actions">
             <button className="btn-ghost" onClick={() => setImportOpen(true)}>Import (.xlsx)</button>
             <button className="btn-ghost" onClick={() => setMoImportOpen(true)}>Import MO Messages</button>
+            <button className="btn-ghost" onClick={() => setPriceSyncOpen(true)}>Sync Prices</button>
           </div>
         )}
       </div>
@@ -310,6 +312,47 @@ export default function Dashboard() {
                   <summary>Show errors</summary>
                   <pre className="result-pre">{p.errors.map((e) => (e.idx >= 0 ? `row ${e.idx}: ` : '') + e.error).join('\n')}</pre>
                 </details>
+              </li>
+            )}
+          </ul>
+        )}
+      />
+
+      <ImportPanel
+        open={priceSyncOpen}
+        onClose={() => setPriceSyncOpen(false)}
+        onDone={() => loadAll(date)}
+        endpoint="/api/import/prices"
+        title="Sync Prices — from the MO Prices master sheet (.xlsx)"
+        summarize={(p) => (
+          <ul className="preview-list">
+            <li>Price changes to apply: <b>{p.changes?.length ?? 0}</b> (effective {p.effectiveFrom})</li>
+            <li>Already up to date: <b>{p.unchanged ?? 0}</b></li>
+            <li>Skipped — ambiguous sheet rows: <b>{p.conflicts?.length ?? 0}</b></li>
+            <li>Not in sheet (left alone): <b>{p.notInSheet?.length ?? 0}</b></li>
+            {p.changes?.length > 0 && (
+              <li>
+                <details open>
+                  <summary>Changes ({p.changes.length})</summary>
+                  <pre className="result-pre">{p.changes.map((c) => {
+                    const b = c.buy ? `buy ${c.buy.from}→${c.buy.to}` : '';
+                    const s = c.sell ? `sell ${c.sell.from}→${c.sell.to}` : '';
+                    return `${c.number.padEnd(20)} ${[b, s].filter(Boolean).join('  ')}`;
+                  }).join('\n')}</pre>
+                </details>
+              </li>
+            )}
+            {p.conflicts?.length > 0 && (
+              <li style={{ color: 'var(--danger-fg)' }}>
+                <details>
+                  <summary>Skipped — code appears more than once in the sheet ({p.conflicts.length})</summary>
+                  <pre className="result-pre">{p.conflicts.map((c) => `${c.number} (code ${c.code})`).join('\n')}</pre>
+                </details>
+              </li>
+            )}
+            {p.errors?.length > 0 && (
+              <li style={{ color: 'var(--danger-fg)' }}>
+                <pre className="result-pre">{p.errors.map((e) => e.error).join('\n')}</pre>
               </li>
             )}
           </ul>

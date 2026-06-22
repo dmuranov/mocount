@@ -12,6 +12,10 @@ import {
   parseAndAnalyze as parseMoMessages,
   commitImport as commitMoMessages,
 } from '../services/momessages_import.js';
+import {
+  parseAndAnalyze as parsePrices,
+  commitImport as commitPrices,
+} from '../services/prices_import.js';
 
 export const importRouter = express.Router();
 const upload = multer({ storage: multer.memoryStorage(), limits: { fileSize: 5 * 1024 * 1024 } });
@@ -48,6 +52,25 @@ importRouter.post('/api/import/momessages', requireAdmin, upload.single('file'),
     return res.json({ ok: true, dryRun: false, ...result });
   } catch (err) {
     console.error('[/api/import/momessages]', err);
+    res.status(500).json({ ok: false, error: err.message });
+  }
+});
+
+// Price sync — reconcile per-message prices from the master "MO Prices"
+// sheet (xlsx). See src/services/prices_import.js.
+importRouter.post('/api/import/prices', requireAdmin, upload.single('file'), async (req, res) => {
+  if (!req.file) return res.status(400).json({ ok: false, error: 'file field is required (multipart/form-data)' });
+  const dryRun = String(req.query.dryRun || 'true') !== 'false';
+  try {
+    if (dryRun) {
+      const plan = await parsePrices(req.file.buffer);
+      return res.json({ ok: true, dryRun: true, ...plan });
+    }
+    const result = await commitPrices(req.file.buffer, req.user.id);
+    if (!result.ok) return res.status(400).json(result);
+    return res.json({ ok: true, dryRun: false, ...result });
+  } catch (err) {
+    console.error('[/api/import/prices]', err);
     res.status(500).json({ ok: false, error: err.message });
   }
 });
