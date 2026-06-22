@@ -15,6 +15,7 @@ import Volumes from './pages/Volumes.jsx';
 import History from './pages/History.jsx';
 import Reports from './pages/Reports.jsx';
 import ReportDetail from './pages/ReportDetail.jsx';
+import Invoices from './pages/Invoices.jsx';
 import SlackSettings from './pages/SlackSettings.jsx';
 import Audit from './pages/Audit.jsx';
 import Users from './pages/Users.jsx';
@@ -36,6 +37,7 @@ export default function App() {
             <Route path="/history" element={<History />} />
             <Route path="/reports" element={<Reports />} />
             <Route path="/reports/:yyyymm" element={<ReportDetail />} />
+            <Route path="/invoices" element={<RequireAdmin><Invoices /></RequireAdmin>} />
             <Route path="/users" element={<RequireAdmin><Users /></RequireAdmin>} />
             <Route path="/audit" element={<RequireAdmin><Audit /></RequireAdmin>} />
             <Route path="/settings/slack" element={<RequireAdmin><SlackSettings /></RequireAdmin>} />

@@ -18,6 +18,7 @@ import { supabase } from '../supabase.js';
 import { auditLog } from '../util/audit.js';
 import { buildMonthReport } from './reports.js';
 import { monthBounds } from './calc.js';
+import { fetchVolumesInRange } from '../util/volumes.js';
 
 const RESEND_URL = 'https://api.resend.com/emails';
 
@@ -68,18 +69,16 @@ async function loadReportSnapshot(yyyymm) {
 
   // No snapshot — recompute (defensive; the admin path always has one).
   const bounds = monthBounds(yyyymm);
-  const [{ data: numbers, error: nErr }, { data: volumes, error: vErr }, { data: fees, error: fErr }] = await Promise.all([
+  const [{ data: numbers, error: nErr }, volumes, { data: fees, error: fErr }] = await Promise.all([
     sb.from('numbers').select('id, number, type, country, client, purchase_price_per_mo, selling_price_per_mo, active'),
-    sb.from('daily_volumes').select('number_id, date, volume')
-      .gte('date', bounds.firstDay).lte('date', bounds.lastDay),
+    fetchVolumesInRange(sb, bounds.firstDay, bounds.lastDay),
     sb.from('fees').select('number_id, type, side, amount, effective_from, effective_to')
       .lte('effective_from', bounds.lastDay)
       .or(`effective_to.is.null,effective_to.gte.${bounds.firstDay}`),
   ]);
   if (nErr) throw new Error(nErr.message);
-  if (vErr) throw new Error(vErr.message);
   if (fErr) throw new Error(fErr.message);
-  const snapshot = buildMonthReport({ numbers: numbers || [], volumes: volumes || [], fees: fees || [], month: yyyymm });
+  const snapshot = buildMonthReport({ numbers: numbers || [], volumes, fees: fees || [], month: yyyymm });
   return { snapshot, status: close?.status || null };
 }
 

@@ -18,6 +18,14 @@ async function request(method, path, body) {
     const err = new Error(msg);
     err.status = res.status;
     err.data = data;
+    // Session expired / not authenticated: send the user to /login
+    // (unless they're already on /login or /access-denied, to avoid a loop).
+    if (data?.code === 'AUTH_REQUIRED') {
+      const here = window.location.pathname;
+      if (here !== '/login' && here !== '/access-denied') {
+        window.location.href = '/login';
+      }
+    }
     throw err;
   }
   return data;

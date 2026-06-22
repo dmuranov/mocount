@@ -12,6 +12,7 @@ const NAV = [
   { to: '/volumes',         label: 'Volumes',   adminOnly: true },
   { to: '/history',         label: 'History',   adminOnly: false },
   { to: '/reports',         label: 'Reports',   adminOnly: false },
+  { to: '/invoices',        label: 'Invoices',  adminOnly: true },
   { to: '/users',           label: 'Users',     adminOnly: true },
   { to: '/audit',           label: 'Audit',     adminOnly: true },
   { to: '/settings/slack',  label: 'Slack',     adminOnly: true },

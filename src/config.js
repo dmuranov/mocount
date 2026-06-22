@@ -35,6 +35,18 @@ export const CONFIG = {
   EMAIL_REPLY_TO: optional('EMAIL_REPLY_TO'),
 
   SESSION_SECRET: optional('SESSION_SECRET'),
+
+  // Issuer + bank info shown on generated pro forma invoices.
+  // Kept out of source per the no-employer-name rule — set in the live
+  // .env on the VM. Empty values render as blank in the invoice header.
+  ISSUER_NAME: optional('ISSUER_NAME'),
+  ISSUER_ADDRESS: optional('ISSUER_ADDRESS'),    // newline-separated lines
+  ISSUER_EMAIL: optional('ISSUER_EMAIL'),
+  BANK_NAME: optional('BANK_NAME'),
+  BANK_ADDRESS: optional('BANK_ADDRESS'),
+  BANK_ACCOUNT_HOLDER: optional('BANK_ACCOUNT_HOLDER'),
+  BANK_IBAN: optional('BANK_IBAN'),
+  BANK_SWIFT: optional('BANK_SWIFT'),
 };
 
 // Step 3 demands these specifically; called at server boot so misconfig

@@ -36,6 +36,48 @@ function normPrice(v, label) {
   return n;
 }
 
+function todayISO() {
+  const d = new Date();
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
+function yesterdayISO() {
+  const d = new Date();
+  d.setUTCDate(d.getUTCDate() - 1);
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
+}
+
+// Close any open price-history row for (number_id, side) and insert a new
+// row effective from today. Same-day re-edit is treated as a correction:
+// we just update the open row's price instead of creating a 0-day window.
+async function logPriceChange({ numberId, side, newPrice, userId }) {
+  const today = todayISO();
+  const { data: open } = await supabase()
+    .from('number_price_history')
+    .select('id, effective_from, price')
+    .eq('number_id', numberId).eq('side', side).is('effective_to', null)
+    .maybeSingle();
+
+  if (open && open.effective_from === today) {
+    await supabase()
+      .from('number_price_history')
+      .update({ price: newPrice, created_by: userId })
+      .eq('id', open.id);
+    return;
+  }
+  if (open) {
+    await supabase()
+      .from('number_price_history')
+      .update({ effective_to: yesterdayISO() })
+      .eq('id', open.id);
+  }
+  await supabase()
+    .from('number_price_history')
+    .insert({ number_id: numberId, side, price: newPrice, effective_from: today, created_by: userId });
+}
+
 function rowShape(r) {
   if (!r) return null;
   const margin = (Number(r.selling_price_per_mo) || 0) - (Number(r.purchase_price_per_mo) || 0);
@@ -194,6 +236,15 @@ numbersRouter.patch('/api/numbers/:id', requireAdmin, async (req, res) => {
     if (updErr) {
       if (updErr.code === '23505') return res.status(409).json({ ok: false, error: 'A number with that value already exists' });
       return res.status(500).json({ ok: false, error: updErr.message });
+    }
+
+    // Log price changes to number_price_history so pro forma invoices can
+    // split mid-month rate changes into separate line items.
+    if (Number(existing.purchase_price_per_mo) !== Number(updated.purchase_price_per_mo)) {
+      await logPriceChange({ numberId: id, side: 'purchase', newPrice: Number(updated.purchase_price_per_mo), userId: req.user.id });
+    }
+    if (Number(existing.selling_price_per_mo) !== Number(updated.selling_price_per_mo)) {
+      await logPriceChange({ numberId: id, side: 'selling', newPrice: Number(updated.selling_price_per_mo), userId: req.user.id });
     }
 
     await auditLog({

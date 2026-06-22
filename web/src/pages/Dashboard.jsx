@@ -1,5 +1,6 @@
 // Dashboard — SPEC §4.
-//   Top: date picker + 4 cards (yesterday vol/rev, MTD vol/rev) + admin import buttons.
+//   Top: date picker + 4 cards driven by the picked date
+//        (day vol/rev, MTD vol/rev through that date) + admin import buttons.
 //   Body: one row per active number with a Volume cell editable by admins.
 //   Save persists every edited row via POST /api/volumes (bulk upsert).
 //
@@ -36,7 +37,7 @@ export default function Dashboard() {
   const [numbers, setNumbers] = useState(null);   // null = loading
   const [volumes, setVolumes] = useState(new Map()); // number_id -> volume on `date`
   const [edits, setEdits] = useState(new Map());     // number_id -> string (input value)
-  const [history, setHistory] = useState(null);
+  const [monthVolumes, setMonthVolumes] = useState([]); // raw rows from month-start → date, drives cards
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -46,17 +47,17 @@ export default function Dashboard() {
   async function loadAll(thisDate) {
     setError(null);
     try {
-      const [{ numbers: nums }, { volumes: vols }, hist] = await Promise.all([
+      const monthStart = thisDate.slice(0, 7) + '-01';
+      const [{ numbers: nums }, { volumes: vols }] = await Promise.all([
         api.get('/api/numbers?active=true'),
-        api.get(`/api/volumes?from=${thisDate}&to=${thisDate}`),
-        api.get(`/api/history/${thisDate.slice(0, 7)}`),
+        api.get(`/api/volumes?from=${monthStart}&to=${thisDate}`),
       ]);
       setNumbers(nums);
       const map = new Map();
-      for (const v of vols) map.set(v.number_id, v.volume);
+      for (const v of vols) if (v.date === thisDate) map.set(v.number_id, v.volume);
       setVolumes(map);
       setEdits(new Map()); // reset pending edits when the date changes
-      setHistory(hist);
+      setMonthVolumes(vols);
     } catch (e) {
       setError(e.message);
     }
@@ -98,24 +99,30 @@ export default function Dashboard() {
     }
   }
 
-  // ── Cards: yesterday + MTD from /api/history ──
+  // ── Cards: picked-date totals + MTD-through-picked-date ──
+  // Computed client-side from monthVolumes so it works for any past
+  // date and any month — no /api/history truncation to "yesterday."
   const cards = useMemo(() => {
-    if (!history) return null;
-    const last = history.visibleLastDay;
-    const yest = last ? history.sections : null;
-    let yVol = 0, yRev = 0;
-    if (yest) {
-      for (const s of Object.values(yest)) {
-        const cell = s.byDay?.[last];
-        if (cell) { yVol += cell.volume; yRev += cell.revenue; }
+    if (!numbers) return null;
+    const numById = new Map(numbers.map((n) => [n.id, n]));
+    let dayVol = 0, dayRev = 0, mtdVol = 0, mtdRev = 0;
+    for (const v of monthVolumes) {
+      const num = numById.get(v.number_id);
+      if (!num) continue;
+      const m = (Number(num.selling_price_per_mo) || 0) - (Number(num.purchase_price_per_mo) || 0);
+      const rev = (Number(v.volume) || 0) * m;
+      mtdVol += Number(v.volume) || 0;
+      mtdRev += rev;
+      if (v.date === date) {
+        dayVol += Number(v.volume) || 0;
+        dayRev += rev;
       }
     }
     return {
-      yesterdayDate: last,
-      yesterday: { volume: yVol, revenue: Math.round(yRev * 100) / 100 },
-      mtd: history.grandTotal,
+      day: { volume: dayVol, revenue: Math.round(dayRev * 100) / 100 },
+      mtd: { volume: mtdVol, revenue: Math.round(mtdRev * 100) / 100 },
     };
-  }, [history]);
+  }, [numbers, monthVolumes, date]);
 
   return (
     <div className="page">
@@ -138,10 +145,10 @@ export default function Dashboard() {
 
       {cards && (
         <div className="cards">
-          <Card label={`Yesterday volume${cards.yesterdayDate ? ` (${cards.yesterdayDate})` : ''}`} value={formatInt(cards.yesterday.volume)} />
-          <Card label="Yesterday revenue" value={formatMoney(cards.yesterday.revenue)} />
-          <Card label={`MTD volume (${history.month})`} value={formatInt(cards.mtd.volume)} />
-          <Card label="MTD revenue" value={formatMoney(cards.mtd.revenue)} />
+          <Card label={`Volume on ${date}`} value={formatInt(cards.day.volume)} />
+          <Card label={`Revenue on ${date}`} value={formatMoney(cards.day.revenue)} />
+          <Card label={`MTD volume (through ${date})`} value={formatInt(cards.mtd.volume)} />
+          <Card label={`MTD revenue (through ${date})`} value={formatMoney(cards.mtd.revenue)} />
         </div>
       )}
 

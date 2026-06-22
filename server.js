@@ -26,6 +26,7 @@ import { importRouter } from './src/routes/import.js';
 import { auditRouter } from './src/routes/audit.js';
 import { membersRouter } from './src/routes/members.js';
 import { slackRouter } from './src/routes/slack.js';
+import { invoicesRouter } from './src/routes/invoices.js';
 import { startScheduler } from './src/jobs/scheduler.js';
 import { loadUser } from './src/auth/middleware.js';
 
@@ -57,6 +58,8 @@ app.use(auditRouter);
 app.use(membersRouter);
 // Slack settings + test send (admin)
 app.use(slackRouter);
+// Pro forma invoices: JSON, print-ready HTML, CSV (admin)
+app.use(invoicesRouter);
 
 // Health endpoint — pm2/Caddy/uptime monitors hit this.
 app.get('/api/health', (_req, res) => {

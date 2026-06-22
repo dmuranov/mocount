@@ -11,6 +11,7 @@ import { requireAuth } from '../auth/middleware.js';
 import { supabase } from '../supabase.js';
 import { buildHistoryMatrix } from '../services/history.js';
 import { monthBounds } from '../services/calc.js';
+import { fetchVolumesInRange } from '../util/volumes.js';
 
 export const historyRouter = express.Router();
 
@@ -26,15 +27,10 @@ async function loadMatrix(ym, query) {
   const { data: numbers, error: numErr } = await sb
     .from('numbers').select('id, number, type, country, client, purchase_price_per_mo, selling_price_per_mo, active');
   if (numErr) throw new Error(numErr.message);
-  const { data: volumes, error: volErr } = await sb
-    .from('daily_volumes')
-    .select('number_id, date, volume')
-    .gte('date', bounds.firstDay)
-    .lte('date', bounds.lastDay);
-  if (volErr) throw new Error(volErr.message);
+  const volumes = await fetchVolumesInRange(sb, bounds.firstDay, bounds.lastDay);
   return buildHistoryMatrix({
     numbers: numbers || [],
-    volumes: volumes || [],
+    volumes,
     month: ym,
     client: query.client ? String(query.client) : null,
     country: query.country ? String(query.country) : null,

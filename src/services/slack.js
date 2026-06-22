@@ -10,6 +10,8 @@
 import { supabase } from '../supabase.js';
 import { buildHistoryMatrix } from './history.js';
 import { auditLog } from '../util/audit.js';
+import { fetchVolumesInRange } from '../util/volumes.js';
+import { monthBounds } from './calc.js';
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 function todayUTC() {
@@ -71,16 +73,14 @@ async function loadMatrixForYesterday() {
   const month = yest.slice(0, 7);
   const sb = supabase();
 
-  const [{ data: numbers, error: nErr }, { data: volumes, error: vErr }] = await Promise.all([
-    sb.from('numbers').select('id, number, type, country, client, purchase_price_per_mo, selling_price_per_mo, active'),
-    sb.from('daily_volumes').select('number_id, date, volume')
-      .gte('date', `${month}-01`).lte('date', `${month}-31`),
-  ]);
+  const { data: numbers, error: nErr } = await sb
+    .from('numbers').select('id, number, type, country, client, purchase_price_per_mo, selling_price_per_mo, active');
   if (nErr) throw new Error(nErr.message);
-  if (vErr) throw new Error(vErr.message);
+  const { firstDay, lastDay } = monthBounds(month);
+  const volumes = await fetchVolumesInRange(sb, firstDay, lastDay);
 
   return {
-    matrix: buildHistoryMatrix({ numbers: numbers || [], volumes: volumes || [], month }),
+    matrix: buildHistoryMatrix({ numbers: numbers || [], volumes, month }),
     yesterday: yest,
   };
 }

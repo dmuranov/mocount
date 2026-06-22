@@ -18,6 +18,7 @@ import { buildMonthReport } from '../services/reports.js';
 import { sendMonthlyReport } from '../services/email.js';
 import { runMonthlyPrep } from '../jobs/scheduler.js';
 import { monthBounds } from '../services/calc.js';
+import { fetchVolumesInRange } from '../util/volumes.js';
 
 export const reportsRouter = express.Router();
 
@@ -33,10 +34,7 @@ async function loadReport(yyyymm) {
     .from('numbers').select('id, number, type, country, client, purchase_price_per_mo, selling_price_per_mo, active');
   if (nErr) throw new Error(nErr.message);
 
-  const { data: volumes, error: vErr } = await sb
-    .from('daily_volumes').select('number_id, date, volume')
-    .gte('date', bounds.firstDay).lte('date', bounds.lastDay);
-  if (vErr) throw new Error(vErr.message);
+  const volumes = await fetchVolumesInRange(sb, bounds.firstDay, bounds.lastDay);
 
   // Fees: pull anything that *could* touch the month. Monthly fees
   // already-closed before firstDay are filtered out by the resolver;
@@ -49,7 +47,7 @@ async function loadReport(yyyymm) {
 
   return buildMonthReport({
     numbers: numbers || [],
-    volumes: volumes || [],
+    volumes,
     fees: fees || [],
     month: yyyymm,
   });

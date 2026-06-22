@@ -14,6 +14,7 @@ import { buildMonthReport } from '../services/reports.js';
 import { monthBounds } from '../services/calc.js';
 import { sendPrepReadyToAdmins } from '../services/email.js';
 import { auditLog } from '../util/audit.js';
+import { fetchVolumesInRange } from '../util/volumes.js';
 
 // Keep a handle so tests / hot reload can stop us if needed.
 const tasks = [];
@@ -81,18 +82,16 @@ export async function runMonthlyPrep(now = new Date()) {
 
   // Build snapshot fresh.
   const bounds = monthBounds(ym);
-  const [{ data: numbers, error: nErr }, { data: volumes, error: vErr }, { data: fees, error: fErr }] = await Promise.all([
+  const [{ data: numbers, error: nErr }, volumes, { data: fees, error: fErr }] = await Promise.all([
     sb.from('numbers').select('id, number, type, country, client, purchase_price_per_mo, selling_price_per_mo, active'),
-    sb.from('daily_volumes').select('number_id, date, volume')
-      .gte('date', bounds.firstDay).lte('date', bounds.lastDay),
+    fetchVolumesInRange(sb, bounds.firstDay, bounds.lastDay),
     sb.from('fees').select('number_id, type, side, amount, effective_from, effective_to')
       .lte('effective_from', bounds.lastDay)
       .or(`effective_to.is.null,effective_to.gte.${bounds.firstDay}`),
   ]);
   if (nErr) throw new Error(nErr.message);
-  if (vErr) throw new Error(vErr.message);
   if (fErr) throw new Error(fErr.message);
-  const snapshot = buildMonthReport({ numbers: numbers || [], volumes: volumes || [], fees: fees || [], month: ym });
+  const snapshot = buildMonthReport({ numbers: numbers || [], volumes, fees: fees || [], month: ym });
 
   const row = { month: ym, status: 'pending', snapshot, prepared_at: new Date().toISOString() };
   const { error: upErr } = existing
