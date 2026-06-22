@@ -42,6 +42,7 @@ export default function Dashboard() {
   const [saving, setSaving] = useState(false);
 
   const [importOpen, setImportOpen] = useState(false);
+  const [moImportOpen, setMoImportOpen] = useState(false);
   const [drawerId, setDrawerId] = useState(null);
 
   async function loadAll(thisDate) {
@@ -139,6 +140,7 @@ export default function Dashboard() {
         {isAdmin && (
           <div className="dash-actions">
             <button className="btn-ghost" onClick={() => setImportOpen(true)}>Import (.xlsx)</button>
+            <button className="btn-ghost" onClick={() => setMoImportOpen(true)}>Import MO Messages</button>
           </div>
         )}
       </div>
@@ -258,6 +260,55 @@ export default function Dashboard() {
                 <details>
                   <summary>Show errors</summary>
                   <pre className="result-pre">{p.errors.map((e) => `row ${e.idx}: ${e.error}`).join('\n')}</pre>
+                </details>
+              </li>
+            )}
+          </ul>
+        )}
+      />
+
+      <ImportPanel
+        open={moImportOpen}
+        onClose={() => setMoImportOpen(false)}
+        onDone={() => loadAll(date)}
+        endpoint="/api/import/momessages"
+        title="Import MO Messages report (.xlsx) — daily volumes only"
+        summarize={(p) => (
+          <ul className="preview-list">
+            <li>Rows read: <b>{p.totalRows ?? 0}</b></li>
+            <li>Numbers matched: <b>{p.matchedNumbers ?? 0}</b></li>
+            <li>Daily volumes to upsert: <b>{p.volumesToUpsert?.length ?? 0}</b></li>
+            <li>Total messages: <b>{(p.totalMessages ?? 0).toLocaleString('en-US')}</b></li>
+            <li>VLN members rolled into parents: <b>{p.vln?.membersMatched ?? 0}</b> → <b>{p.vln?.parentsTouched ?? 0}</b> parent number(s)</li>
+            <li>Observability traffic excluded: <b>{p.excludedObservability?.receivers ?? 0}</b> code(s), <b>{(p.excludedObservability?.messages ?? 0).toLocaleString('en-US')}</b> msgs</li>
+            <li>Ambiguous codes resolved by MCC: <b>{p.ambiguousResolved?.length ?? 0}</b></li>
+            <li>Unknown receivers (skipped): <b>{p.unknownReceivers?.length ?? 0}</b></li>
+            <li>Ambiguous unresolved (skipped): <b>{p.ambiguousUnresolved?.length ?? 0}</b></li>
+            <li>Errors: <b>{p.errors?.length ?? 0}</b></li>
+            {p.closedMonths?.length > 0 && (
+              <li style={{ color: 'var(--danger-fg)' }}>Closed months in file: {p.closedMonths.join(', ')}</li>
+            )}
+            {p.ambiguousResolved?.length > 0 && (
+              <li>
+                <details>
+                  <summary>Ambiguous codes resolved ({p.ambiguousResolved.length})</summary>
+                  <pre className="result-pre">{p.ambiguousResolved.map((a) => `${a.code} → ${a.chosen} (${a.via})${a.ignored?.length ? `  [ignored: ${a.ignored.join(', ')}]` : ''}`).join('\n')}</pre>
+                </details>
+              </li>
+            )}
+            {p.unknownReceivers?.length > 0 && (
+              <li style={{ color: 'var(--danger-fg)' }}>
+                <details>
+                  <summary>Unknown receivers — not in system, will be skipped ({p.unknownReceivers.length})</summary>
+                  <pre className="result-pre">{p.unknownReceivers.map((u) => `${u.receiver} — ${u.totalMessages.toLocaleString('en-US')} msgs over ${u.days} day(s)`).join('\n')}</pre>
+                </details>
+              </li>
+            )}
+            {p.errors?.length > 0 && (
+              <li style={{ color: 'var(--danger-fg)' }}>
+                <details>
+                  <summary>Show errors</summary>
+                  <pre className="result-pre">{p.errors.map((e) => (e.idx >= 0 ? `row ${e.idx}: ` : '') + e.error).join('\n')}</pre>
                 </details>
               </li>
             )}
