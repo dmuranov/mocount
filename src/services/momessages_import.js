@@ -84,6 +84,25 @@ function mccOf(v) {
   return m ? m[1] : null;
 }
 
+// Full normalized MCC-MNC, e.g. "722-310" (whitespace stripped). null for
+// blank/"Unknown". Used for operator-level routing (see OPERATOR_SPLITS).
+function mccMncOf(v) {
+  const s = String(v ?? '').replace(/\s+/g, '');
+  return /^\d{3}-?\w+$/.test(s) ? s : null;
+}
+
+// Operator-level splits: one bare code that intentionally maps to >1 DB
+// number distinguished by destination operator (MNC), not country —
+// e.g. AR 78887 has a separate "(Claro)" record priced differently. For
+// a configured code, each report row routes to the target whose MNC set
+// contains the row's MCC-MNC; rows in no rule fall through to `base`.
+const OPERATOR_SPLITS = new Map(Object.entries({
+  '78887': {
+    base: 'AR - 78887',
+    rules: [{ number: 'AR - 78887 (Claro)', mncs: new Set(['722-310', '722-320', '722-330']) }],
+  },
+}));
+
 // Code-suffix of a DB number: "ZA - 33009" → "33009", "990994" → "990994".
 function codeOf(number) {
   const m = String(number).match(/-\s*(.+)$/);
@@ -187,7 +206,8 @@ export async function parseAndAnalyze(buffer) {
     const volume = asVolume(getCell(r, headerMap, 'volume'));
     if (volume === null) { errors.push({ idx: i, error: `Invalid Messages for ${receiver} on ${date} (must be a non-negative integer)` }); continue; }
 
-    entries.push({ date, receiver, mcc: hasMcc ? mccOf(getCell(r, headerMap, 'mcc')) : null, volume });
+    const mccCell = hasMcc ? getCell(r, headerMap, 'mcc') : null;
+    entries.push({ date, receiver, mcc: mccOf(mccCell), mccMnc: mccMncOf(mccCell), volume });
   }
 
   const receivers = [...new Set(entries.map((e) => e.receiver))];
@@ -223,11 +243,14 @@ export async function parseAndAnalyze(buffer) {
   }
 
   // Numbers indexed by code-suffix. code -> [{ id, number, country }].
+  // numberByString resolves an exact DB label (used by operator splits).
   const codeIndex = new Map();
+  const numberByString = new Map();
   {
     const { data, error } = await sb.from('numbers').select('id, number, country');
     if (error) return errPlan('Numbers lookup failed: ' + error.message, rows.length);
     for (const n of data || []) {
+      numberByString.set(n.number, { id: n.id, number: n.number });
       const code = codeOf(n.number);
       if (!codeIndex.has(code)) codeIndex.set(code, []);
       // `country` here is the prefix from the number string, not the
@@ -253,7 +276,22 @@ export async function parseAndAnalyze(buffer) {
   const vlnParents = new Set();
   let vlnMembersMatched = 0;
 
+  const splitTargetsMissing = new Set();
   for (const e of entries) {
+    // 0. Operator split (intentional same-code, different-operator records,
+    //    e.g. AR 78887 vs AR 78887 (Claro)). Route by the row's MCC-MNC.
+    const split = OPERATOR_SPLITS.get(e.receiver);
+    if (split) {
+      let targetStr = split.base;
+      for (const rule of split.rules) { if (e.mccMnc && rule.mncs.has(e.mccMnc)) { targetStr = rule.number; break; } }
+      const tgt = numberByString.get(targetStr);
+      if (tgt) { addResolved(tgt.id, tgt.number, e.date, e.volume); continue; }
+      // Configured target not in DB → surface it rather than silently drop.
+      splitTargetsMissing.add(targetStr);
+      if (!unknownAgg.has(e.receiver)) unknownAgg.set(e.receiver, { receiver: e.receiver, totalMessages: 0, days: new Set() });
+      const u = unknownAgg.get(e.receiver); u.totalMessages += e.volume; u.days.add(e.date);
+      continue;
+    }
     // 1. VLN member → parent
     const parent = memberToParent.get(e.receiver);
     if (parent) {
@@ -283,6 +321,10 @@ export async function parseAndAnalyze(buffer) {
     } else {
       deferred.push(e); // resolve after we know the receiver's dominant country
     }
+  }
+
+  for (const t of splitTargetsMissing) {
+    errors.push({ idx: -1, error: `Operator-split target "${t}" not found in numbers — create it or fix the split config` });
   }
 
   // Deferred ambiguous rows (no MCC match, e.g. "Unknown" MCC): assign to
