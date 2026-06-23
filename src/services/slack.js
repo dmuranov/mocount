@@ -9,6 +9,7 @@
 
 import { supabase } from '../supabase.js';
 import { buildHistoryMatrix } from './history.js';
+import { loadSplitPricing } from './operator_pricing.js';
 import { auditLog } from '../util/audit.js';
 import { fetchVolumesInRange } from '../util/volumes.js';
 import { monthBounds } from './calc.js';
@@ -78,9 +79,10 @@ async function loadMatrixForYesterday() {
   if (nErr) throw new Error(nErr.message);
   const { firstDay, lastDay } = monthBounds(month);
   const volumes = await fetchVolumesInRange(sb, firstDay, lastDay);
+  const split = await loadSplitPricing(sb, month);
 
   return {
-    matrix: buildHistoryMatrix({ numbers: numbers || [], volumes, month }),
+    matrix: buildHistoryMatrix({ numbers: numbers || [], volumes, month, split }),
     yesterday: yest,
   };
 }

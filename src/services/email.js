@@ -17,6 +17,7 @@ import { CONFIG } from '../config.js';
 import { supabase } from '../supabase.js';
 import { auditLog } from '../util/audit.js';
 import { buildMonthReport } from './reports.js';
+import { loadSplitPricing } from './operator_pricing.js';
 import { monthBounds } from './calc.js';
 import { fetchVolumesInRange } from '../util/volumes.js';
 
@@ -78,7 +79,8 @@ async function loadReportSnapshot(yyyymm) {
   ]);
   if (nErr) throw new Error(nErr.message);
   if (fErr) throw new Error(fErr.message);
-  const snapshot = buildMonthReport({ numbers: numbers || [], volumes, fees: fees || [], month: yyyymm });
+  const split = await loadSplitPricing(sb, yyyymm);
+  const snapshot = buildMonthReport({ numbers: numbers || [], volumes, fees: fees || [], month: yyyymm, split });
   return { snapshot, status: close?.status || null };
 }
 

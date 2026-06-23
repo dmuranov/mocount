@@ -14,6 +14,7 @@ import { requireAdmin } from '../auth/middleware.js';
 import { supabase } from '../supabase.js';
 import { CONFIG } from '../config.js';
 import { buildInvoiceLines } from '../services/invoices.js';
+import { loadSplitPricing } from '../services/operator_pricing.js';
 import { monthBounds } from '../services/calc.js';
 import { fetchVolumesInRange } from '../util/volumes.js';
 
@@ -58,14 +59,15 @@ function escapeCsv(s) {
 // ── pull what we need for the invoice in three queries ──────
 async function loadInvoiceInputs(month) {
   const { firstDay, lastDay } = monthBounds(month);
-  const [numsRes, volumes, histRes] = await Promise.all([
+  const [numsRes, volumes, histRes, split] = await Promise.all([
     supabase().from('numbers').select('id, number, type, country, client, selling_price_per_mo').eq('active', true),
     fetchVolumesInRange(supabase(), firstDay, lastDay),
     supabase().from('number_price_history').select('number_id, side, price, effective_from, effective_to').eq('side', 'selling'),
+    loadSplitPricing(supabase(), month),
   ]);
   if (numsRes.error) throw new Error(numsRes.error.message);
   if (histRes.error) throw new Error(histRes.error.message);
-  return { numbers: numsRes.data || [], volumes, priceHistory: histRes.data || [] };
+  return { numbers: numsRes.data || [], volumes, priceHistory: histRes.data || [], split };
 }
 
 // ── GET /api/invoices/:yyyymm?client=... → JSON ─────────────
@@ -163,6 +165,23 @@ function renderInvoiceHtml(data, client) {
       </tr>`;
   }).join('');
 
+  // Operator breakdown — portal only (class no-print → never on the PDF), and
+  // never in the CSV. Exposes purchase cost, so it must not reach the customer.
+  const splitLines = data.lines.filter((ln) => ln.operatorSlices && ln.operatorSlices.length);
+  const breakdownHtml = splitLines.length ? `
+<details class="no-print op-breakdown">
+  <summary>View operator breakdown — internal, not shown to the customer (${splitLines.length} number${splitLines.length > 1 ? 's' : ''})</summary>
+  <div class="op-note">Each split SC bills as one blended line above; per-operator detail below sums to that exact amount.</div>
+  ${splitLines.map((ln) => `
+  <div class="op-block">
+    <div class="op-title">${escapeHtml(ln.number)} — Qty. ${fmtInt(ln.qty)} · blended rate ${fmtRate(ln.rate)} · ${fmtMoney(ln.amount)}</div>
+    <table class="op-table">
+      <thead><tr><th>MCC-MNC</th><th>Group</th><th class="r">Qty</th><th class="r">Purchase</th><th class="r">Selling</th><th class="r">Revenue</th></tr></thead>
+      <tbody>${ln.operatorSlices.map((s) => `<tr><td>${escapeHtml(s.mcc_mnc)}</td><td>${escapeHtml(s.label)}</td><td class="r">${fmtInt(s.qty)}</td><td class="r">${fmtRate(s.purchase)}</td><td class="r">${fmtRate(s.selling)}</td><td class="r">${fmtMoney(s.revenue)}</td></tr>`).join('')}</tbody>
+    </table>
+  </div>`).join('')}
+</details>` : '';
+
   return `<!doctype html>
 <html lang="en"><head>
 <meta charset="utf-8">
@@ -201,6 +220,14 @@ function renderInvoiceHtml(data, client) {
     border-top: 1px solid #1a1a1a; border-bottom: 1px solid #1a1a1a;
     font-weight: 700; font-size: 14px;
   }
+  .op-breakdown { margin: -6px 0 20px; font-size: 10.5px; }
+  .op-breakdown summary { cursor: pointer; color: #555; padding: 6px 0; user-select: none; }
+  .op-breakdown .op-block { margin: 8px 0 14px; }
+  .op-breakdown .op-title { font-weight: 600; margin-bottom: 4px; }
+  .op-breakdown table.op-table { width: 100%; border-collapse: collapse; }
+  .op-breakdown .op-table th, .op-breakdown .op-table td { padding: 4px 6px; border-bottom: 1px solid #eee; text-align: left; }
+  .op-breakdown .op-table th.r, .op-breakdown .op-table td.r { text-align: right; font-variant-numeric: tabular-nums; }
+  .op-breakdown .op-note { color: #999; font-style: italic; margin-bottom: 6px; }
   .pay h2 { font-size: 14px; font-weight: 700; margin: 0 0 12px; }
   .pay-grid { display: grid; grid-template-columns: 130px 1fr 130px 1fr; row-gap: 5px; column-gap: 14px; font-size: 11px; }
   .pay-grid .k { color: #444; }
@@ -248,6 +275,7 @@ function renderInvoiceHtml(data, client) {
     <div class="row grand"><span>Total amount in USD</span><span class="val">${fmtMoney(data.grandTotal)}</span></div>
   </div>
 </div>
+${breakdownHtml}
 
 <div class="box pay">
   <h2>Payment information</h2>

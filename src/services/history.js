@@ -41,10 +41,12 @@ function dayList(firstDay, lastDay) {
 // `currentDate` — optional ISO datetime; defaults to now (for tests)
 // `client`      — optional case-insensitive filter; matches exact client
 // `country`     — optional ISO-2 filter; matches exact country
+// `split`       — optional { splitIds:Set, perDay:Map } from loadSplitPricing;
+//                 split SCs take their daily revenue (margin) from there.
 //
 // Returns a section-keyed structure consumed by the History page.
 export function buildHistoryMatrix({
-  numbers, volumes, month, currentDate = null, client = null, country = null,
+  numbers, volumes, month, currentDate = null, client = null, country = null, split = null,
 }) {
   const { month: m, firstDay, lastDay } = monthBounds(month);
 
@@ -111,6 +113,7 @@ export function buildHistoryMatrix({
     let sectVolume = 0, sectRevenue = 0;
 
     for (const n of byType.get(type)) {
+      const numSplit = split && split.splitIds.has(n.id);
       const numByDay = {};
       let numVolume = 0, numRevenue = 0;
       for (const d of days) {
@@ -119,8 +122,10 @@ export function buildHistoryMatrix({
           numByDay[d] = { volume: 0, revenue: 0 };
           continue;
         }
-        const m2 = margin(n.purchase_price_per_mo, n.selling_price_per_mo);
-        const rev = Math.round(v * m2 * 100) / 100;
+        // Split SC: exact per-operator margin for the day; else snapshot margin.
+        const rev = numSplit
+          ? (split.perDay.get(`${n.id}|${d}`)?.margin ?? 0)
+          : Math.round(v * margin(n.purchase_price_per_mo, n.selling_price_per_mo) * 100) / 100;
         numByDay[d] = { volume: v, revenue: rev };
         numVolume += v;
         numRevenue += rev;

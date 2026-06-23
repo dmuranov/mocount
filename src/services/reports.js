@@ -8,6 +8,7 @@
 import { margin, monthBounds, activeMonthlyFees, yearlyFeesInMonth, setupFeesInMonth } from './calc.js';
 
 function r2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
+function r4(n) { return Math.round((Number(n) || 0) * 10000) / 10000; }
 
 // ── buildMonthReport ────────────────────────────────────────
 // Inputs:
@@ -17,9 +18,12 @@ function r2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 //   fees    — [{ number_id, type, side, amount, effective_from, effective_to }]
 //   month   — 'YYYY-MM'
 //
+//   split   — optional { splitIds:Set, perMonth:Map } from loadSplitPricing;
+//             split SCs take exact per-operator sales/cost/margin from there.
+//
 // Returns:
 //   { month, summary, perNumber, costs, clientBilling }
-export function buildMonthReport({ numbers, volumes, fees, month }) {
+export function buildMonthReport({ numbers, volumes, fees, month, split = null }) {
   const { firstDay, lastDay } = monthBounds(month);
   const numbersList = numbers || [];
   const byId = new Map(numbersList.map((n) => [n.id, n]));
@@ -61,15 +65,34 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
   });
   const perRow = sortedNumbers.map((n) => {
     const volume = volByNumber.get(n.id) || 0;
-    const m = margin(n.purchase_price_per_mo, n.selling_price_per_mo);
-    const purchase = Number(n.purchase_price_per_mo) || 0;
-    const selling = Number(n.selling_price_per_mo) || 0;
     const monthlyCost = monthlyByNumberSide.get(`${n.id}|cost`) || 0;
     const yearlyCost  = yearlyByNumberSide.get(`${n.id}|cost`) || 0;
     const setupCost   = setupByNumberSide.get(`${n.id}|cost`) || 0;
     const monthlySale = monthlyByNumberSide.get(`${n.id}|sale`) || 0;
     const yearlySale  = yearlyByNumberSide.get(`${n.id}|sale`) || 0;
     const setupSale   = setupByNumberSide.get(`${n.id}|sale`) || 0;
+
+    // Split SC → exact per-operator sales/cost (UNROUNDED raws, so the
+    // *_total below fold fees in before a single round). Displayed prices
+    // become the volume-weighted blend. Else: flat snapshot price × volume.
+    const pm = split && split.splitIds.has(n.id) ? split.perMonth.get(n.id) : null;
+    let purchase, selling, m, costVolRaw, salesVolRaw, revenue;
+    if (pm) {
+      const qty = pm.qty || 0;
+      purchase = qty ? r4(pm.cost / qty) : (Number(n.purchase_price_per_mo) || 0);
+      selling  = qty ? r4(pm.sales / qty) : (Number(n.selling_price_per_mo) || 0);
+      m = r4(selling - purchase);
+      costVolRaw = pm.cost;
+      salesVolRaw = pm.sales;
+      revenue = r2(pm.margin);
+    } else {
+      purchase = Number(n.purchase_price_per_mo) || 0;
+      selling = Number(n.selling_price_per_mo) || 0;
+      m = margin(n.purchase_price_per_mo, n.selling_price_per_mo);
+      costVolRaw = volume * purchase;
+      salesVolRaw = volume * selling;
+      revenue = r2(volume * m);
+    }
     return {
       id: n.id,
       number: n.number,
@@ -80,17 +103,17 @@ export function buildMonthReport({ numbers, volumes, fees, month }) {
       purchase_price: purchase,
       selling_price: selling,
       margin: m,
-      revenue: r2(volume * m),
-      cost_volume: r2(volume * purchase),
+      revenue,
+      cost_volume: r2(costVolRaw),
       cost_monthly_fee: r2(monthlyCost),
       cost_yearly_fee: r2(yearlyCost),
       cost_setup_fee: r2(setupCost),
-      cost_total: r2(volume * purchase + monthlyCost + yearlyCost + setupCost),
-      sales_volume: r2(volume * selling),
+      cost_total: r2(costVolRaw + monthlyCost + yearlyCost + setupCost),
+      sales_volume: r2(salesVolRaw),
       sale_monthly_fee: r2(monthlySale),
       sale_yearly_fee: r2(yearlySale),
       sale_setup_fee: r2(setupSale),
-      sale_total: r2(volume * selling + monthlySale + yearlySale + setupSale),
+      sale_total: r2(salesVolRaw + monthlySale + yearlySale + setupSale),
     };
   });
 

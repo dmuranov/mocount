@@ -10,6 +10,7 @@ import * as XLSX from 'xlsx';
 import { requireAuth } from '../auth/middleware.js';
 import { supabase } from '../supabase.js';
 import { buildHistoryMatrix } from '../services/history.js';
+import { loadSplitPricing } from '../services/operator_pricing.js';
 import { monthBounds } from '../services/calc.js';
 import { fetchVolumesInRange } from '../util/volumes.js';
 
@@ -28,12 +29,14 @@ async function loadMatrix(ym, query) {
     .from('numbers').select('id, number, type, country, client, purchase_price_per_mo, selling_price_per_mo, active');
   if (numErr) throw new Error(numErr.message);
   const volumes = await fetchVolumesInRange(sb, bounds.firstDay, bounds.lastDay);
+  const split = await loadSplitPricing(sb, ym);
   return buildHistoryMatrix({
     numbers: numbers || [],
     volumes,
     month: ym,
     client: query.client ? String(query.client) : null,
     country: query.country ? String(query.country) : null,
+    split,
   });
 }
 

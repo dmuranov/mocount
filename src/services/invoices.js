@@ -18,11 +18,16 @@ function r2(n) { return Math.round((Number(n) || 0) * 100) / 100; }
 // priceHistory  — [{ number_id, side, price, effective_from, effective_to }] (selling-side)
 // month         — 'YYYY-MM'
 // client        — exact case-insensitive match against numbers.client
+// split         — optional { splitIds:Set, perMonth:Map } from loadSplitPricing.
+//                 A number in splitIds is priced per operator under the hood and
+//                 emitted as ONE blended line (qty=total, rate=sales/qty, amount=
+//                 exact summed sales) instead of via the selling rate-windows.
 //
 // Returns { month, monthStart, monthEnd, lines, grandTotal }.
 // `lines` shape:
-//   { number_id, number, type, country, fromDate, toDate, qty, rate, amount }
-export function buildInvoiceLines({ numbers, volumes, priceHistory, month, client }) {
+//   { number_id, number, type, country, fromDate, toDate, qty, rate, amount,
+//     operatorSlices? }  — operatorSlices present only on split lines.
+export function buildInvoiceLines({ numbers, volumes, priceHistory, month, client, split }) {
   const { firstDay, lastDay } = monthBounds(month);
 
   const target = String(client || '').trim().toLowerCase();
@@ -54,6 +59,23 @@ export function buildInvoiceLines({ numbers, volumes, priceHistory, month, clien
   let grandTotal = 0;
 
   for (const n of filtered) {
+    // Split SC → one blended line from the exact per-operator figures. The
+    // rate-window path below is skipped (its selling history for this number
+    // mixes default + per-group rows and must not be used directly).
+    if (split && split.splitIds.has(n.id)) {
+      const pm = split.perMonth.get(n.id);
+      if (!pm || pm.qty <= 0) continue;
+      const amount = r2(pm.sales);
+      const rate = pm.qty ? Math.round((pm.sales / pm.qty) * 1e4) / 1e4 : 0;
+      lines.push({
+        number_id: n.id, number: n.number, type: n.type, country: n.country,
+        fromDate: firstDay, toDate: lastDay, qty: pm.qty, rate, amount,
+        operatorSlices: pm.slices,
+      });
+      grandTotal += amount;
+      continue;
+    }
+
     const history = sellingByNum.get(n.id) || [];
     const numVols = volsByNum.get(n.id);
     if (!numVols || numVols.size === 0) continue;

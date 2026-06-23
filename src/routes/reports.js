@@ -15,6 +15,7 @@ import { requireAuth, requireAdmin } from '../auth/middleware.js';
 import { supabase } from '../supabase.js';
 import { auditLog } from '../util/audit.js';
 import { buildMonthReport } from '../services/reports.js';
+import { loadSplitPricing } from '../services/operator_pricing.js';
 import { sendMonthlyReport } from '../services/email.js';
 import { runMonthlyPrep } from '../jobs/scheduler.js';
 import { monthBounds } from '../services/calc.js';
@@ -45,11 +46,14 @@ async function loadReport(yyyymm) {
     .or(`effective_to.is.null,effective_to.gte.${bounds.firstDay}`);
   if (fErr) throw new Error(fErr.message);
 
+  const split = await loadSplitPricing(sb, yyyymm);
+
   return buildMonthReport({
     numbers: numbers || [],
     volumes,
     fees: fees || [],
     month: yyyymm,
+    split,
   });
 }
 

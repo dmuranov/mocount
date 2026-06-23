@@ -11,6 +11,7 @@ import { postDaily, todayUTC } from '../services/slack.js';
 import { supabase } from '../supabase.js';
 import { CONFIG } from '../config.js';
 import { buildMonthReport } from '../services/reports.js';
+import { loadSplitPricing } from '../services/operator_pricing.js';
 import { monthBounds } from '../services/calc.js';
 import { sendPrepReadyToAdmins } from '../services/email.js';
 import { auditLog } from '../util/audit.js';
@@ -91,7 +92,8 @@ export async function runMonthlyPrep(now = new Date()) {
   ]);
   if (nErr) throw new Error(nErr.message);
   if (fErr) throw new Error(fErr.message);
-  const snapshot = buildMonthReport({ numbers: numbers || [], volumes, fees: fees || [], month: ym });
+  const split = await loadSplitPricing(sb, ym);
+  const snapshot = buildMonthReport({ numbers: numbers || [], volumes, fees: fees || [], month: ym, split });
 
   const row = { month: ym, status: 'pending', snapshot, prepared_at: new Date().toISOString() };
   const { error: upErr } = existing

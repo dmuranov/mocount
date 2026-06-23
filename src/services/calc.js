@@ -107,11 +107,13 @@ export function sumAmount(fees) {
 //
 // Returns the canonical CREDIT/DEBIT/NET shape from SPEC §3 + per-side
 // fee breakdowns. Pure — caller does the DB pulls and feeds this in.
-export function buildMonthPnL({ numbers, volumes, fees, month }) {
+export function buildMonthPnL({ numbers, volumes, fees, month, split = null }) {
   const { firstDay, lastDay } = monthBounds(month);
   const byId = new Map((numbers || []).map((n) => [n.id, n]));
 
   // Revenue = sum over (volume × margin) for every volume row in the month.
+  // Split SCs are priced exactly per operator instead — their volume still
+  // counts here, but their margin is added from split.perMonth below.
   let revenue = 0;
   let totalVolume = 0;
   for (const v of volumes || []) {
@@ -119,9 +121,15 @@ export function buildMonthPnL({ numbers, volumes, fees, month }) {
     if (v.date < firstDay || v.date > lastDay) continue;
     const num = byId.get(v.number_id);
     if (!num) continue;
+    totalVolume += Number(v.volume) || 0;
+    if (split && split.splitIds.has(v.number_id)) continue; // margin added below
     const m = margin(num.purchase_price_per_mo, num.selling_price_per_mo);
     revenue += (Number(v.volume) || 0) * m;
-    totalVolume += Number(v.volume) || 0;
+  }
+  if (split) {
+    for (const [numberId, pm] of split.perMonth) {
+      if (byId.has(numberId)) revenue += pm.margin;
+    }
   }
   revenue = r2(revenue);
 

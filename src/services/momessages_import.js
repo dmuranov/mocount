@@ -91,36 +91,11 @@ function mccMncOf(v) {
   return /^\d{3}-?\w+$/.test(s) ? s : null;
 }
 
-// Operator-level splits: one bare code that intentionally maps to >1 DB
-// number distinguished by destination operator (MNC), not country —
-// e.g. AR 78887 has a separate "(Claro)" record priced differently. For
-// a configured code, each report row routes to the target whose MNC set
-// contains the row's MCC-MNC; rows in no rule fall through to `base`.
-const OPERATOR_SPLITS = new Map(Object.entries({
-  '78887': {
-    base: 'AR - 78887',
-    rules: [{ number: 'AR - 78887 (Claro)', mncs: new Set(['722-310', '722-320', '722-330']) }],
-  },
-  // MX TeleQ codes price per destination operator (Concepto rate sheet).
-  // base = the standard tier (AT&T / Telecomm / Altan, buy=sell=0.0070);
-  // Telcel + Movistar carry their own rate, so they get their own record.
-  // MNC sets cover both the dashed report form ("334-02") and the rate
-  // sheet's undashed form ("33402"), and the 2- vs 3-digit MNC variants.
-  '43800': {
-    base: 'MX - 43800',
-    rules: [
-      { number: 'MX - 43800 (Telcel)',   mncs: new Set(['334-02', '33402', '334-20', '33420', '334-020', '334020']) },
-      { number: 'MX - 43800 (Movistar)', mncs: new Set(['334-30', '33430', '334-030', '334030']) },
-    ],
-  },
-  '43902': {
-    base: 'MX - 43902',
-    rules: [
-      { number: 'MX - 43902 (Telcel)',   mncs: new Set(['334-02', '33402', '334-20', '33420', '334-020', '334020']) },
-      { number: 'MX - 43902 (Movistar)', mncs: new Set(['334-30', '33430', '334-030', '334030']) },
-    ],
-  },
-}));
+// Operator-level pricing is now DATA, not code: a single SC number carries
+// optional override groups (number_operator_prices) keyed by MNC, and the
+// per-MCC-MNC volume we record below lets each operator's traffic be priced
+// under the hood. The importer therefore resolves a code to its ONE active
+// number and keeps the row's MCC-MNC, instead of routing to duplicate records.
 
 // Code-suffix of a DB number: "ZA - 33009" → "33009", "990994" → "990994".
 function codeOf(number) {
@@ -175,6 +150,7 @@ function getCell(row, headerMap, key) {
 function errPlan(message, totalRows = 0) {
   return {
     volumesToUpsert: [],
+    volumeOperatorsToUpsert: [],
     unknownReceivers: [],
     ambiguousResolved: [],
     ambiguousUnresolved: [],
@@ -232,7 +208,7 @@ export async function parseAndAnalyze(buffer) {
   const receivers = [...new Set(entries.map((e) => e.receiver))];
   if (!receivers.length) {
     return {
-      volumesToUpsert: [], unknownReceivers: [], ambiguousResolved: [], ambiguousUnresolved: [],
+      volumesToUpsert: [], volumeOperatorsToUpsert: [], unknownReceivers: [], ambiguousResolved: [], ambiguousUnresolved: [],
       excludedObservability: { receivers: obsReceivers.size, messages: obsMessages },
       vln: { membersMatched: 0, parentsTouched: 0 }, closedMonths: [], errors, totalRows: rows.length,
       matchedNumbers: 0, totalMessages: 0,
@@ -262,14 +238,13 @@ export async function parseAndAnalyze(buffer) {
   }
 
   // Numbers indexed by code-suffix. code -> [{ id, number, country }].
-  // numberByString resolves an exact DB label (used by operator splits).
+  // ACTIVE only — a deactivated split duplicate must never make a code look
+  // ambiguous or capture new volume.
   const codeIndex = new Map();
-  const numberByString = new Map();
   {
-    const { data, error } = await sb.from('numbers').select('id, number, country');
+    const { data, error } = await sb.from('numbers').select('id, number, country, active').eq('active', true);
     if (error) return errPlan('Numbers lookup failed: ' + error.message, rows.length);
     for (const n of data || []) {
-      numberByString.set(n.number, { id: n.id, number: n.number });
       const code = codeOf(n.number);
       if (!codeIndex.has(code)) codeIndex.set(code, []);
       // `country` here is the prefix from the number string, not the
@@ -279,14 +254,23 @@ export async function parseAndAnalyze(buffer) {
   }
 
   // ── Resolve every entry to a target number_id ──
-  // resolved: key 'number_id|date' -> { number_id, label, date, volume }
+  // resolved:    key 'number_id|date' -> { number_id, label, date, volume } (rollup)
+  // resolvedOps: key 'number_id|date|mcc_mnc' -> per-operator volume detail.
+  // SC code-matches carry their MCC-MNC into resolvedOps so operator pricing
+  // can split them later; VLN parent rollups don't (no single operator).
   const resolved = new Map();
+  const resolvedOps = new Map();
   const labelById = new Map();
-  const addResolved = (id, label, date, volume) => {
+  const addResolved = (id, label, date, volume, mccMnc) => {
     labelById.set(id, label);
     const k = `${id}|${date}`;
     if (!resolved.has(k)) resolved.set(k, { number_id: id, label, date, volume: 0 });
     resolved.get(k).volume += volume;
+    if (mccMnc) {
+      const ok = `${id}|${date}|${mccMnc}`;
+      if (!resolvedOps.has(ok)) resolvedOps.set(ok, { number_id: id, date, mcc_mnc: mccMnc, volume: 0 });
+      resolvedOps.get(ok).volume += volume;
+    }
   };
 
   const unknownAgg = new Map();      // receiver -> { receiver, totalMessages, days:Set }
@@ -295,23 +279,8 @@ export async function parseAndAnalyze(buffer) {
   const vlnParents = new Set();
   let vlnMembersMatched = 0;
 
-  const splitTargetsMissing = new Set();
   for (const e of entries) {
-    // 0. Operator split (intentional same-code, different-operator records,
-    //    e.g. AR 78887 vs AR 78887 (Claro)). Route by the row's MCC-MNC.
-    const split = OPERATOR_SPLITS.get(e.receiver);
-    if (split) {
-      let targetStr = split.base;
-      for (const rule of split.rules) { if (e.mccMnc && rule.mncs.has(e.mccMnc)) { targetStr = rule.number; break; } }
-      const tgt = numberByString.get(targetStr);
-      if (tgt) { addResolved(tgt.id, tgt.number, e.date, e.volume); continue; }
-      // Configured target not in DB → surface it rather than silently drop.
-      splitTargetsMissing.add(targetStr);
-      if (!unknownAgg.has(e.receiver)) unknownAgg.set(e.receiver, { receiver: e.receiver, totalMessages: 0, days: new Set() });
-      const u = unknownAgg.get(e.receiver); u.totalMessages += e.volume; u.days.add(e.date);
-      continue;
-    }
-    // 1. VLN member → parent
+    // 1. VLN member → parent (rollup only; no per-operator split)
     const parent = memberToParent.get(e.receiver);
     if (parent) {
       addResolved(parent.id, parent.label, e.date, e.volume);
@@ -319,7 +288,7 @@ export async function parseAndAnalyze(buffer) {
       vlnMembersMatched++;
       continue;
     }
-    // 2/3. Code match
+    // 2/3. Code match — keep the row's MCC-MNC for operator-level pricing.
     const cands = codeIndex.get(e.receiver);
     if (!cands) {
       if (!unknownAgg.has(e.receiver)) unknownAgg.set(e.receiver, { receiver: e.receiver, totalMessages: 0, days: new Set() });
@@ -327,23 +296,19 @@ export async function parseAndAnalyze(buffer) {
       continue;
     }
     if (cands.length === 1) {
-      addResolved(cands[0].id, cands[0].number, e.date, e.volume);
+      addResolved(cands[0].id, cands[0].number, e.date, e.volume, e.mccMnc);
       continue;
     }
     // Ambiguous: disambiguate by MCC → country.
     const iso = e.mcc ? MCC_TO_ISO2.get(e.mcc) : null;
     const pick = iso ? cands.find((c) => normCountry(c.country) === iso) : null;
     if (pick) {
-      addResolved(pick.id, pick.number, e.date, e.volume);
+      addResolved(pick.id, pick.number, e.date, e.volume, e.mccMnc);
       if (!ambResolvedNote.has(e.receiver)) ambResolvedNote.set(e.receiver, { code: e.receiver, chosen: pick.number, via: `MCC ${e.mcc} → ${iso}`, ignored: new Set() });
       for (const c of cands) if (c.id !== pick.id) ambResolvedNote.get(e.receiver).ignored.add(c.number);
     } else {
       deferred.push(e); // resolve after we know the receiver's dominant country
     }
-  }
-
-  for (const t of splitTargetsMissing) {
-    errors.push({ idx: -1, error: `Operator-split target "${t}" not found in numbers — create it or fix the split config` });
   }
 
   // Deferred ambiguous rows (no MCC match, e.g. "Unknown" MCC): assign to
@@ -365,7 +330,7 @@ export async function parseAndAnalyze(buffer) {
         if (v > bestVol) { bestVol = v; best = c; }
       }
       if (best && bestVol > 0) {
-        for (const e of es) addResolved(best.id, best.number, e.date, e.volume);
+        for (const e of es) addResolved(best.id, best.number, e.date, e.volume, e.mccMnc);
         const note = ambResolvedNote.get(receiver) || { code: receiver, chosen: best.number, via: 'dominant country', ignored: new Set() };
         ambResolvedNote.set(receiver, note);
       } else {
@@ -395,6 +360,13 @@ export async function parseAndAnalyze(buffer) {
     volumesToUpsert.push({ number_id: r.number_id, number: r.label, date: r.date, volume: r.volume });
   }
 
+  // Per-operator detail mirrors the rollup; closed months already errored above.
+  const volumeOperatorsToUpsert = [];
+  for (const r of resolvedOps.values()) {
+    if (closedSet.has(r.date.slice(0, 7))) continue;
+    volumeOperatorsToUpsert.push({ number_id: r.number_id, date: r.date, mcc_mnc: r.mcc_mnc, volume: r.volume });
+  }
+
   const unknownReceivers = [...unknownAgg.values()]
     .map((u) => ({ receiver: u.receiver, totalMessages: u.totalMessages, days: u.days.size }))
     .sort((a, b) => b.totalMessages - a.totalMessages);
@@ -402,6 +374,7 @@ export async function parseAndAnalyze(buffer) {
 
   return {
     volumesToUpsert,
+    volumeOperatorsToUpsert,
     unknownReceivers,
     ambiguousResolved,
     ambiguousUnresolved,
@@ -470,6 +443,24 @@ export async function commitImport(buffer, userId) {
       entityId: `${row.number_id}|${row.date}`,
       diff: { source: 'momessages_import', date: row.date, volume: [prev ?? null, row.volume] },
     });
+  }
+
+  // Per-operator detail: replace exactly the (number_id, date) pairs we wrote
+  // above (delete-then-insert so a network that vanished from the report
+  // doesn't leave a stale row), then bulk-insert the fresh breakdown.
+  const datesByNumber = new Map();
+  for (const v of upsertRows) {
+    if (!datesByNumber.has(v.number_id)) datesByNumber.set(v.number_id, new Set());
+    datesByNumber.get(v.number_id).add(v.date);
+  }
+  for (const [numId, dset] of datesByNumber) {
+    const { error } = await sb.from('daily_volume_operators').delete().eq('number_id', numId).in('date', [...dset]);
+    if (error) return { ok: false, error: 'operator detail clear failed: ' + error.message };
+  }
+  const opRows = (plan.volumeOperatorsToUpsert || []).map((v) => ({ ...v, entered_by: userId, entered_at: nowIso }));
+  for (let i = 0; i < opRows.length; i += 500) {
+    const { error } = await sb.from('daily_volume_operators').insert(opRows.slice(i, i + 500));
+    if (error) return { ok: false, error: 'operator detail write failed: ' + error.message };
   }
 
   return { ok: true, volumes: { written: upsertRows.length, changed, unchanged }, ...base };
