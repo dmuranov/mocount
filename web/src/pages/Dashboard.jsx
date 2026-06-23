@@ -183,17 +183,23 @@ export default function Dashboard() {
               const persisted = volumes.has(n.id) ? String(volumes.get(n.id)) : '';
               const editVal = edits.has(n.id) ? edits.get(n.id) : persisted;
               const dirty = edits.has(n.id) && editVal !== persisted;
+              const op = n.has_operator_pricing;
+              const buy = op ? n.avg_purchase_price_per_mo : n.purchase_price_per_mo;
+              const sell = op ? n.avg_selling_price_per_mo : n.selling_price_per_mo;
+              const marg = op ? (sell - buy) : n.margin_per_mo;
+              const pfx = op ? '~' : '';
               return (
                 <tr key={n.id} className={dirty ? 'row-dirty' : ''}>
                   <td className="mono">
                     <button className="link-btn" onClick={() => setDrawerId(n.id)}>{n.number}</button>
+                    {op && <span title="Priced per network — exact rates in the drawer" style={{ color: 'var(--accent)', fontWeight: 700 }}>*</span>}
                   </td>
                   <td>{n.type}</td>
                   <td>{n.country || '—'}</td>
                   <td>{n.client || '—'}</td>
-                  <td style={{ textAlign: 'right' }} className="mono">{n.purchase_price_per_mo.toFixed(4)}</td>
-                  <td style={{ textAlign: 'right' }} className="mono">{n.selling_price_per_mo.toFixed(4)}</td>
-                  <td style={{ textAlign: 'right' }} className="mono">{n.margin_per_mo.toFixed(4)}</td>
+                  <td style={{ textAlign: 'right' }} className="mono" title={op ? 'average of per-network rates' : ''}>{pfx}{buy.toFixed(4)}</td>
+                  <td style={{ textAlign: 'right' }} className="mono" title={op ? 'average of per-network rates' : ''}>{pfx}{sell.toFixed(4)}</td>
+                  <td style={{ textAlign: 'right' }} className="mono">{pfx}{marg.toFixed(4)}</td>
                   <td style={{ textAlign: 'right' }}>
                     {isAdmin ? (
                       <input

@@ -264,6 +264,11 @@ export default function NumberDrawer({ numberId, onClose, onChanged }) {
               )}
             </section>
 
+            {/* Operator pricing — SC only: per-network rate overrides */}
+            {num.type === 'SC' && (
+              <OperatorPricing numberId={numberId} isAdmin={isAdmin} onChanged={onChanged} />
+            )}
+
             {/* LVN members — only for LVN-type parents */}
             {num.type === 'LVN' && (
               <LvnMembers numberId={numberId} onChanged={onChanged} />
@@ -410,5 +415,125 @@ function FeeRow({ fee, bucket, isAdmin, busy, onDelete, onPatch }) {
         </span>
       )}
     </li>
+  );
+}
+
+// ── Operator pricing (per-network rate overrides) ───────────
+// The number's own purchase/selling is the default (catch-all) rate; each
+// group overrides it for a set of MNCs. Volume on those networks bills at
+// the group rate under the hood; the customer still sees one blended line.
+function OperatorPricing({ numberId, isAdmin, onChanged }) {
+  const [groups, setGroups] = useState(null);
+  const [err, setErr] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [adding, setAdding] = useState(false);
+
+  async function load() {
+    setErr(null);
+    try {
+      const r = await api.get(`/api/numbers/${numberId}/operator-pricing`);
+      setGroups(r.groups);
+    } catch (e) { setErr(e.message); }
+  }
+  useEffect(() => { load(); }, [numberId]);
+
+  async function run(fn) {
+    setBusy(true); setErr(null);
+    try { await fn(); await load(); onChanged?.(); }
+    catch (e) { setErr(e.message); }
+    finally { setBusy(false); }
+  }
+  const createGroup = (payload) => run(async () => {
+    await api.post(`/api/numbers/${numberId}/operator-pricing`, payload);
+    setAdding(false);
+  });
+  const patchGroup = (id, payload) => run(() => api.patch(`/api/operator-pricing/${id}`, payload));
+  const deleteGroup = (id) => {
+    if (!confirm('Delete this operator group? Its rate history is removed and that network falls back to the default rate.')) return;
+    run(() => api.del(`/api/operator-pricing/${id}`));
+  };
+
+  return (
+    <section className="drawer-sect">
+      <h4>Operator pricing (per network)</h4>
+      <p className="mono" style={{ color: 'var(--dim)', marginTop: '-6px', marginBottom: 8 }}>
+        // override the default rate for specific MNCs — that traffic bills at the group rate
+      </p>
+      {err && <div className="err-box" style={{ marginBottom: 10 }}>{err}</div>}
+      {groups === null && <p className="mono" style={{ color: 'var(--dim)' }}>loading…</p>}
+      {groups && groups.length === 0 && !adding && (
+        <p className="mono" style={{ color: 'var(--dim)' }}>// none — bills entirely at the default rate above</p>
+      )}
+      <ul className="fee-list">
+        {(groups || []).map((g) => (
+          <OperatorRow key={g.id} group={g} isAdmin={isAdmin} busy={busy}
+            onSave={(p) => patchGroup(g.id, p)} onDelete={() => deleteGroup(g.id)} />
+        ))}
+      </ul>
+      {isAdmin && (adding
+        ? <OperatorAdd busy={busy} onCancel={() => setAdding(false)} onCreate={createGroup} />
+        : <button className="btn-ghost" onClick={() => setAdding(true)}>+ Add operator group</button>)}
+    </section>
+  );
+}
+
+function OperatorRow({ group, isAdmin, busy, onSave, onDelete }) {
+  const [editing, setEditing] = useState(false);
+  const [label, setLabel] = useState(group.label);
+  const [mncs, setMncs] = useState((group.mncs || []).join(', '));
+  const [buy, setBuy] = useState(String(group.purchase_price_per_mo));
+  const [sell, setSell] = useState(String(group.selling_price_per_mo));
+
+  async function submit() {
+    const p = { label, mncs };
+    if (Number(buy) !== Number(group.purchase_price_per_mo)) p.purchase_price_per_mo = Number(buy);
+    if (Number(sell) !== Number(group.selling_price_per_mo)) p.selling_price_per_mo = Number(sell);
+    await onSave(p);
+    setEditing(false);
+  }
+
+  if (editing) {
+    return (
+      <li className="fee-row fee-edit" style={{ flexWrap: 'wrap', gap: 6 }}>
+        <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label" style={{ width: 90 }} />
+        <input value={mncs} onChange={(e) => setMncs(e.target.value)} placeholder="MNCs e.g. 310,320" style={{ width: 150 }} />
+        <input type="number" min="0" step="0.0001" value={buy} onChange={(e) => setBuy(e.target.value)} placeholder="buy" style={{ width: 80 }} />
+        <input type="number" min="0" step="0.0001" value={sell} onChange={(e) => setSell(e.target.value)} placeholder="sell" style={{ width: 80 }} />
+        <button className="btn-primary" disabled={busy} onClick={submit}>Save</button>
+        <button className="btn-ghost" onClick={() => setEditing(false)}>Cancel</button>
+      </li>
+    );
+  }
+  const m = (Number(group.selling_price_per_mo) - Number(group.purchase_price_per_mo)).toFixed(4);
+  return (
+    <li className="fee-row">
+      <span className="mono"><b>{group.label}</b> · {(group.mncs || []).join(', ') || '(no MNCs)'}</span>
+      <span className="mono">buy {group.purchase_price_per_mo.toFixed(4)} · sell {group.selling_price_per_mo.toFixed(4)} · Δ {m}</span>
+      {isAdmin && (
+        <span className="fee-actions">
+          <button className="btn-ghost" disabled={busy} onClick={() => setEditing(true)}>Edit</button>
+          <button className="btn-ghost danger" disabled={busy} onClick={onDelete}>×</button>
+        </span>
+      )}
+    </li>
+  );
+}
+
+function OperatorAdd({ busy, onCancel, onCreate }) {
+  const [label, setLabel] = useState('');
+  const [mncs, setMncs] = useState('');
+  const [buy, setBuy] = useState('');
+  const [sell, setSell] = useState('');
+  const valid = label.trim() && mncs.trim() && buy !== '' && sell !== '';
+  return (
+    <div className="fee-add" style={{ flexWrap: 'wrap', gap: 6 }}>
+      <input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="label e.g. Claro" style={{ width: 90 }} />
+      <input value={mncs} onChange={(e) => setMncs(e.target.value)} placeholder="MNCs e.g. 310,320,330" style={{ width: 160 }} />
+      <input type="number" min="0" step="0.0001" value={buy} onChange={(e) => setBuy(e.target.value)} placeholder="buy" style={{ width: 80 }} />
+      <input type="number" min="0" step="0.0001" value={sell} onChange={(e) => setSell(e.target.value)} placeholder="sell" style={{ width: 80 }} />
+      <button className="btn-primary" disabled={busy || !valid}
+        onClick={() => onCreate({ label, mncs, purchase_price_per_mo: Number(buy), selling_price_per_mo: Number(sell) })}>Add</button>
+      <button className="btn-ghost" onClick={onCancel}>Cancel</button>
+    </div>
   );
 }

@@ -49,16 +49,18 @@ function yesterdayISO() {
   return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}`;
 }
 
-// Close any open price-history row for (number_id, side) and insert a new
-// row effective from today. Same-day re-edit is treated as a correction:
-// we just update the open row's price instead of creating a 0-day window.
-async function logPriceChange({ numberId, side, newPrice, userId }) {
+// Close any open price-history row for (number_id, side[, operator group]) and
+// insert a new row effective from today. operatorGroupId=null is the number's
+// default rate; a uuid scopes the window to that operator override group.
+// Same-day re-edit is treated as a correction: update the open row in place.
+async function logPriceChange({ numberId, side, newPrice, userId, operatorGroupId = null }) {
   const today = todayISO();
-  const { data: open } = await supabase()
+  let sel = supabase()
     .from('number_price_history')
     .select('id, effective_from, price')
-    .eq('number_id', numberId).eq('side', side).is('effective_to', null)
-    .maybeSingle();
+    .eq('number_id', numberId).eq('side', side).is('effective_to', null);
+  sel = operatorGroupId == null ? sel.is('operator_group_id', null) : sel.eq('operator_group_id', operatorGroupId);
+  const { data: open } = await sel.maybeSingle();
 
   if (open && open.effective_from === today) {
     await supabase()
@@ -75,12 +77,45 @@ async function logPriceChange({ numberId, side, newPrice, userId }) {
   }
   await supabase()
     .from('number_price_history')
-    .insert({ number_id: numberId, side, price: newPrice, effective_from: today, created_by: userId });
+    .insert({ number_id: numberId, side, price: newPrice, effective_from: today, created_by: userId, operator_group_id: operatorGroupId });
 }
 
-function rowShape(r) {
+// Normalize an MNC list: accept an array or a comma/space-separated string.
+function normMncs(v) {
+  const arr = Array.isArray(v) ? v : String(v ?? '').split(/[\s,]+/);
+  return [...new Set(arr.map((x) => String(x).trim()).filter(Boolean))];
+}
+
+function groupShape(g) {
+  if (!g) return null;
+  const margin = (Number(g.selling_price_per_mo) || 0) - (Number(g.purchase_price_per_mo) || 0);
+  return {
+    id: g.id,
+    number_id: g.number_id,
+    label: g.label,
+    mncs: g.mncs || [],
+    purchase_price_per_mo: Number(g.purchase_price_per_mo),
+    selling_price_per_mo: Number(g.selling_price_per_mo),
+    margin_per_mo: Number(margin.toFixed(4)),
+    active: g.active,
+  };
+}
+
+function rowShape(r, groups = []) {
   if (!r) return null;
   const margin = (Number(r.selling_price_per_mo) || 0) - (Number(r.purchase_price_per_mo) || 0);
+  const operatorGroups = (groups || []).map(groupShape);
+  const hasOp = operatorGroups.length > 0;
+  // Displayed avg = simple mean of the default rate + each group rate. Purely
+  // cosmetic (the asterisk row); exact billing is per-operator under the hood.
+  let avgPurchase = Number(r.purchase_price_per_mo);
+  let avgSelling = Number(r.selling_price_per_mo);
+  if (hasOp) {
+    const buys = [Number(r.purchase_price_per_mo), ...operatorGroups.map((g) => g.purchase_price_per_mo)];
+    const sells = [Number(r.selling_price_per_mo), ...operatorGroups.map((g) => g.selling_price_per_mo)];
+    avgPurchase = Number((buys.reduce((a, b) => a + b, 0) / buys.length).toFixed(4));
+    avgSelling = Number((sells.reduce((a, b) => a + b, 0) / sells.length).toFixed(4));
+  }
   return {
     id: r.id,
     number: r.number,
@@ -93,6 +128,10 @@ function rowShape(r) {
     active: r.active,
     created_at: r.created_at,
     updated_at: r.updated_at,
+    has_operator_pricing: hasOp,
+    operator_groups: operatorGroups,
+    avg_purchase_price_per_mo: avgPurchase,
+    avg_selling_price_per_mo: avgSelling,
   };
 }
 
@@ -110,7 +149,20 @@ numbersRouter.get('/api/numbers', requireAuth, async (req, res) => {
 
   const { data, error } = await query;
   if (error) return res.status(500).json({ ok: false, error: error.message });
-  res.json({ ok: true, numbers: (data || []).map(rowShape) });
+
+  // Attach active operator-pricing groups so the list can show the asterisk + avg.
+  const { data: groups, error: gErr } = await supabase()
+    .from('number_operator_prices')
+    .select('id, number_id, label, mncs, purchase_price_per_mo, selling_price_per_mo, active')
+    .eq('active', true);
+  if (gErr) return res.status(500).json({ ok: false, error: gErr.message });
+  const groupsByNum = new Map();
+  for (const g of groups || []) {
+    if (!groupsByNum.has(g.number_id)) groupsByNum.set(g.number_id, []);
+    groupsByNum.get(g.number_id).push(g);
+  }
+
+  res.json({ ok: true, numbers: (data || []).map((n) => rowShape(n, groupsByNum.get(n.id) || [])) });
 });
 
 // ── GET /api/numbers/export.xlsx ────────────────────────────
@@ -285,5 +337,114 @@ numbersRouter.delete('/api/numbers/:id', requireAdmin, async (req, res) => {
     diff: { active: [existing.active, false] },
   });
 
+  res.json({ ok: true });
+});
+
+// ── Operator pricing groups ─────────────────────────────────
+// A number can carry per-operator override rates (label + MNC set). The
+// number's own purchase/selling stays the default (catch-all) rate; groups
+// override it for their MNCs. Each group keeps its own price_history window
+// (operator_group_id) so invoices can price past months correctly.
+
+// GET /api/numbers/:id/operator-pricing
+numbersRouter.get('/api/numbers/:id/operator-pricing', requireAuth, async (req, res) => {
+  const { data, error } = await supabase()
+    .from('number_operator_prices')
+    .select('*').eq('number_id', req.params.id).order('label', { ascending: true });
+  if (error) return res.status(500).json({ ok: false, error: error.message });
+  res.json({ ok: true, groups: (data || []).map(groupShape) });
+});
+
+// POST /api/numbers/:id/operator-pricing
+numbersRouter.post('/api/numbers/:id/operator-pricing', requireAdmin, async (req, res) => {
+  try {
+    const numberId = req.params.id;
+    const { data: num, error: nErr } = await supabase().from('numbers').select('id, number').eq('id', numberId).maybeSingle();
+    if (nErr) return res.status(500).json({ ok: false, error: nErr.message });
+    if (!num) return res.status(404).json({ ok: false, error: 'Number not found' });
+
+    const label = String(req.body?.label ?? '').trim();
+    if (!label) return res.status(400).json({ ok: false, error: 'label is required' });
+    const mncs = normMncs(req.body?.mncs);
+    if (!mncs.length) return res.status(400).json({ ok: false, error: 'at least one MNC is required' });
+    const purchase = normPrice(req.body?.purchase_price_per_mo, 'purchase_price_per_mo');
+    const selling = normPrice(req.body?.selling_price_per_mo, 'selling_price_per_mo');
+
+    const { data: g, error } = await supabase()
+      .from('number_operator_prices')
+      .insert({ number_id: numberId, label, mncs, purchase_price_per_mo: purchase, selling_price_per_mo: selling, active: true, updated_by: req.user.id })
+      .select('*').maybeSingle();
+    if (error) return res.status(500).json({ ok: false, error: error.message });
+
+    await logPriceChange({ numberId, side: 'purchase', newPrice: purchase, userId: req.user.id, operatorGroupId: g.id });
+    await logPriceChange({ numberId, side: 'selling', newPrice: selling, userId: req.user.id, operatorGroupId: g.id });
+    await auditLog({
+      userId: req.user.id, action: 'number.operator_price.create', entity: 'number_operator_price', entityId: g.id,
+      diff: { number: num.number, label, mncs, purchase, selling },
+    });
+    res.json({ ok: true, group: groupShape(g) });
+  } catch (e) {
+    res.status(e.code || 500).json({ ok: false, error: e.message });
+  }
+});
+
+// PATCH /api/operator-pricing/:groupId
+numbersRouter.patch('/api/operator-pricing/:groupId', requireAdmin, async (req, res) => {
+  try {
+    const id = req.params.groupId;
+    const { data: existing, error: loadErr } = await supabase().from('number_operator_prices').select('*').eq('id', id).maybeSingle();
+    if (loadErr) return res.status(500).json({ ok: false, error: loadErr.message });
+    if (!existing) return res.status(404).json({ ok: false, error: 'Operator price group not found' });
+
+    const patch = { updated_by: req.user.id, updated_at: new Date().toISOString() };
+    if (req.body?.label !== undefined) {
+      const l = String(req.body.label).trim();
+      if (!l) return res.status(400).json({ ok: false, error: 'label cannot be empty' });
+      patch.label = l;
+    }
+    if (req.body?.mncs !== undefined) {
+      const m = normMncs(req.body.mncs);
+      if (!m.length) return res.status(400).json({ ok: false, error: 'at least one MNC is required' });
+      patch.mncs = m;
+    }
+    if (req.body?.purchase_price_per_mo !== undefined) patch.purchase_price_per_mo = normPrice(req.body.purchase_price_per_mo, 'purchase_price_per_mo');
+    if (req.body?.selling_price_per_mo !== undefined) patch.selling_price_per_mo = normPrice(req.body.selling_price_per_mo, 'selling_price_per_mo');
+    if (req.body?.active !== undefined) patch.active = req.body.active === true;
+    if (Object.keys(patch).length <= 2) return res.status(400).json({ ok: false, error: 'No fields to update' });
+
+    const { data: updated, error: updErr } = await supabase().from('number_operator_prices').update(patch).eq('id', id).select('*').maybeSingle();
+    if (updErr) return res.status(500).json({ ok: false, error: updErr.message });
+
+    if (Number(existing.purchase_price_per_mo) !== Number(updated.purchase_price_per_mo)) {
+      await logPriceChange({ numberId: updated.number_id, side: 'purchase', newPrice: Number(updated.purchase_price_per_mo), userId: req.user.id, operatorGroupId: id });
+    }
+    if (Number(existing.selling_price_per_mo) !== Number(updated.selling_price_per_mo)) {
+      await logPriceChange({ numberId: updated.number_id, side: 'selling', newPrice: Number(updated.selling_price_per_mo), userId: req.user.id, operatorGroupId: id });
+    }
+    await auditLog({
+      userId: req.user.id, action: 'number.operator_price.update', entity: 'number_operator_price', entityId: id,
+      diff: diffShallow({ ...existing, mncs: JSON.stringify(existing.mncs) }, { ...updated, mncs: JSON.stringify(updated.mncs) }),
+    });
+    res.json({ ok: true, group: groupShape(updated) });
+  } catch (e) {
+    res.status(e.code || 500).json({ ok: false, error: e.message });
+  }
+});
+
+// DELETE /api/operator-pricing/:groupId — hard delete (its price history
+// cascades). Volume on that MNC then falls back to the number's default rate.
+numbersRouter.delete('/api/operator-pricing/:groupId', requireAdmin, async (req, res) => {
+  const id = req.params.groupId;
+  const { data: existing, error: loadErr } = await supabase().from('number_operator_prices').select('*').eq('id', id).maybeSingle();
+  if (loadErr) return res.status(500).json({ ok: false, error: loadErr.message });
+  if (!existing) return res.status(404).json({ ok: false, error: 'Operator price group not found' });
+
+  const { error } = await supabase().from('number_operator_prices').delete().eq('id', id);
+  if (error) return res.status(500).json({ ok: false, error: error.message });
+
+  await auditLog({
+    userId: req.user.id, action: 'number.operator_price.delete', entity: 'number_operator_price', entityId: id,
+    diff: { label: existing.label, mncs: existing.mncs, purchase: existing.purchase_price_per_mo, selling: existing.selling_price_per_mo },
+  });
   res.json({ ok: true });
 });

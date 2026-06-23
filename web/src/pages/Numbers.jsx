@@ -208,17 +208,24 @@ export default function Numbers() {
                 {numbers.length === 0 ? 'No numbers yet — import or add a new one.' : 'No matches for these filters.'}
               </td></tr>
             )}
-            {filtered.map((n) => (
+            {filtered.map((n) => {
+              const op = n.has_operator_pricing;
+              const buy = op ? n.avg_purchase_price_per_mo : n.purchase_price_per_mo;
+              const sell = op ? n.avg_selling_price_per_mo : n.selling_price_per_mo;
+              const marg = op ? (sell - buy) : n.margin_per_mo;
+              const pfx = op ? '~' : '';
+              return (
               <tr key={n.id} className={n.active ? '' : 'inactive'}>
                 <td className="mono">
                   <button className="link-btn" onClick={() => setDrawerId(n.id)}>{n.number}</button>
+                  {op && <span title="Priced per network — exact rates in the drawer" style={{ color: 'var(--accent)', fontWeight: 700 }}>*</span>}
                 </td>
                 <td>{n.type}</td>
                 <td>{n.country || '—'}</td>
                 <td>{n.client || '—'}</td>
-                <td style={{ textAlign: 'right' }} className="mono">{n.purchase_price_per_mo.toFixed(4)}</td>
-                <td style={{ textAlign: 'right' }} className="mono">{n.selling_price_per_mo.toFixed(4)}</td>
-                <td style={{ textAlign: 'right' }} className="mono">{n.margin_per_mo.toFixed(4)}</td>
+                <td style={{ textAlign: 'right' }} className="mono" title={op ? 'average of per-network rates' : ''}>{pfx}{buy.toFixed(4)}</td>
+                <td style={{ textAlign: 'right' }} className="mono" title={op ? 'average of per-network rates' : ''}>{pfx}{sell.toFixed(4)}</td>
+                <td style={{ textAlign: 'right' }} className="mono">{pfx}{marg.toFixed(4)}</td>
                 <td>{n.active ? '✓' : '—'}</td>
                 {isAdmin && (
                   <td>
@@ -229,7 +236,8 @@ export default function Numbers() {
                   </td>
                 )}
               </tr>
-            ))}
+              );
+            })}
           </tbody>
         </table>
       </div>
