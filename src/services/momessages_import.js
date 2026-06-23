@@ -101,6 +101,25 @@ const OPERATOR_SPLITS = new Map(Object.entries({
     base: 'AR - 78887',
     rules: [{ number: 'AR - 78887 (Claro)', mncs: new Set(['722-310', '722-320', '722-330']) }],
   },
+  // MX TeleQ codes price per destination operator (Concepto rate sheet).
+  // base = the standard tier (AT&T / Telecomm / Altan, buy=sell=0.0070);
+  // Telcel + Movistar carry their own rate, so they get their own record.
+  // MNC sets cover both the dashed report form ("334-02") and the rate
+  // sheet's undashed form ("33402"), and the 2- vs 3-digit MNC variants.
+  '43800': {
+    base: 'MX - 43800',
+    rules: [
+      { number: 'MX - 43800 (Telcel)',   mncs: new Set(['334-02', '33402', '334-20', '33420', '334-020', '334020']) },
+      { number: 'MX - 43800 (Movistar)', mncs: new Set(['334-30', '33430', '334-030', '334030']) },
+    ],
+  },
+  '43902': {
+    base: 'MX - 43902',
+    rules: [
+      { number: 'MX - 43902 (Telcel)',   mncs: new Set(['334-02', '33402', '334-20', '33420', '334-020', '334020']) },
+      { number: 'MX - 43902 (Movistar)', mncs: new Set(['334-30', '33430', '334-030', '334030']) },
+    ],
+  },
 }));
 
 // Code-suffix of a DB number: "ZA - 33009" → "33009", "990994" → "990994".
