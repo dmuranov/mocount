@@ -21,3 +21,4 @@ test-lvn.xlsx
 _inspect*.cjs
 _convert_google_margin.cjs
 mocount-import.xlsx
+_backup_*.json
