@@ -10,7 +10,7 @@
 //   • Volumes — recurring daily imports. Manual editing in the table is
 //     the alternative path for small daily corrections.
 
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import ImportPanel from '../components/ImportPanel.jsx';
@@ -37,7 +37,7 @@ export default function Dashboard() {
   const [numbers, setNumbers] = useState(null);   // null = loading
   const [volumes, setVolumes] = useState(new Map()); // number_id -> volume on `date`
   const [edits, setEdits] = useState(new Map());     // number_id -> string (input value)
-  const [monthVolumes, setMonthVolumes] = useState([]); // raw rows from month-start → date, drives cards
+  const [cards, setCards] = useState(null);          // { day, mtd } from /api/dashboard/cards
   const [error, setError] = useState(null);
   const [saving, setSaving] = useState(false);
 
@@ -49,17 +49,19 @@ export default function Dashboard() {
   async function loadAll(thisDate) {
     setError(null);
     try {
-      const monthStart = thisDate.slice(0, 7) + '-01';
-      const [{ numbers: nums }, { volumes: vols }] = await Promise.all([
+      // Cards come from the server so split SCs are priced through operator
+      // pricing (same path as History), not the flat snapshot margin.
+      const [{ numbers: nums }, { volumes: vols }, cardData] = await Promise.all([
         api.get('/api/numbers?active=true'),
-        api.get(`/api/volumes?from=${monthStart}&to=${thisDate}`),
+        api.get(`/api/volumes?from=${thisDate}&to=${thisDate}`),
+        api.get(`/api/dashboard/cards?date=${thisDate}`),
       ]);
       setNumbers(nums);
       const map = new Map();
       for (const v of vols) if (v.date === thisDate) map.set(v.number_id, v.volume);
       setVolumes(map);
       setEdits(new Map()); // reset pending edits when the date changes
-      setMonthVolumes(vols);
+      setCards({ day: cardData.day, mtd: cardData.mtd });
     } catch (e) {
       setError(e.message);
     }
@@ -100,31 +102,6 @@ export default function Dashboard() {
       setSaving(false);
     }
   }
-
-  // ── Cards: picked-date totals + MTD-through-picked-date ──
-  // Computed client-side from monthVolumes so it works for any past
-  // date and any month — no /api/history truncation to "yesterday."
-  const cards = useMemo(() => {
-    if (!numbers) return null;
-    const numById = new Map(numbers.map((n) => [n.id, n]));
-    let dayVol = 0, dayRev = 0, mtdVol = 0, mtdRev = 0;
-    for (const v of monthVolumes) {
-      const num = numById.get(v.number_id);
-      if (!num) continue;
-      const m = (Number(num.selling_price_per_mo) || 0) - (Number(num.purchase_price_per_mo) || 0);
-      const rev = (Number(v.volume) || 0) * m;
-      mtdVol += Number(v.volume) || 0;
-      mtdRev += rev;
-      if (v.date === date) {
-        dayVol += Number(v.volume) || 0;
-        dayRev += rev;
-      }
-    }
-    return {
-      day: { volume: dayVol, revenue: Math.round(dayRev * 100) / 100 },
-      mtd: { volume: mtdVol, revenue: Math.round(mtdRev * 100) / 100 },
-    };
-  }, [numbers, monthVolumes, date]);
 
   return (
     <div className="page">

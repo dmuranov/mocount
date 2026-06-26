@@ -21,6 +21,7 @@ import { numbersRouter } from './src/routes/numbers.js';
 import { feesRouter } from './src/routes/fees.js';
 import { volumesRouter } from './src/routes/volumes.js';
 import { historyRouter } from './src/routes/history.js';
+import { dashboardRouter } from './src/routes/dashboard.js';
 import { reportsRouter } from './src/routes/reports.js';
 import { importRouter } from './src/routes/import.js';
 import { auditRouter } from './src/routes/audit.js';
@@ -48,6 +49,8 @@ app.use(feesRouter);
 app.use(volumesRouter);
 // History matrix (auth); UI lands in step 16
 app.use(historyRouter);
+// Dashboard cards (auth) — operator-resolved day/MTD revenue
+app.use(dashboardRouter);
 // Reports JSON + xlsx (auth); UI lands in step 17
 app.use(reportsRouter);
 // Combined xlsx import (admin) — numbers + fees + volumes in one workbook

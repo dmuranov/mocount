@@ -6,7 +6,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { buildHistoryMatrix } from './history.js';
 import { buildMonthReport } from './reports.js';
-import { buildMonthPnL } from './calc.js';
+import { buildMonthPnL, buildDashboardCards } from './calc.js';
 
 const PAST = '2026-04';
 const NOW = '2026-06-15T00:00:00Z'; // makes April a fully-visible past month
@@ -58,4 +58,31 @@ test('P&L: split SC margin added once, volume still counted', () => {
   // s1 margin 8.5 (exact) + s2 1000*0.01 = 10  → 18.5
   assert.equal(r.revenue, 18.5);
   assert.equal(r.totalVolume, 2000);
+});
+
+test('dashboard cards: split SC revenue is operator-resolved, not flat margin', () => {
+  const r = buildDashboardCards({ numbers: NUMS, volumes: VOLS, date: '2026-04-01', split });
+  // Day = MTD here (single day). s1 from perDay margin 8.5 (NOT 1000*1=1000),
+  // s2 normal 1000*0.01 = 10 → 18.5. Volume still counts rollup (2000).
+  assert.equal(r.day.revenue, 18.5);
+  assert.equal(r.day.volume, 2000);
+  assert.equal(r.mtd.revenue, 18.5);
+  assert.equal(r.mtd.volume, 2000);
+});
+
+test('dashboard cards: MTD sums days up to the picked date only', () => {
+  const vols = [
+    { number_id: 's2', date: '2026-04-01', volume: 1000 }, // rev 10
+    { number_id: 's2', date: '2026-04-02', volume: 500 },  // rev 5  (after picked date)
+  ];
+  const r = buildDashboardCards({ numbers: NUMS, volumes: vols, date: '2026-04-01', split });
+  assert.equal(r.day.revenue, 10);
+  assert.equal(r.mtd.revenue, 10);  // 2026-04-02 excluded
+  assert.equal(r.mtd.volume, 1000);
+});
+
+test('dashboard cards: without split, falls back to flat margin', () => {
+  const r = buildDashboardCards({ numbers: NUMS, volumes: VOLS, date: '2026-04-01' });
+  // s1 flat 1000*(1-0)=1000 + s2 1000*0.01=10 → 1010 (pre-operator behavior)
+  assert.equal(r.day.revenue, 1010);
 });
