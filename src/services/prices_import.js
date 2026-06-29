@@ -153,15 +153,18 @@ export function analyzeVln(vlnRows, nums, existingCatalog) {
   const skipped = [];
   let catalogUnchanged = 0;
 
+  const fromNum = (n, claimClient) => ({
+    existingId: n.id, name: n.number, claimClient,
+    curBuy: n.purchase_price_per_mo != null ? Number(n.purchase_price_per_mo) : null,
+    curSell: n.selling_price_per_mo != null ? Number(n.selling_price_per_mo) : null,
+  });
   const resolveParent = (iso, client) => {
     const cands = lvnByIso.get(iso) || [];
     const exact = cands.find((n) => clientKey(n.client) === clientKey(client));
-    if (exact) return { existingId: exact.id, name: exact.number, claimClient: false };
+    if (exact) return fromNum(exact, false);
     const unclaimed = cands.filter((n) => !clientKey(n.client));
-    if (cands.length === 1 && unclaimed.length === 1) {
-      return { existingId: unclaimed[0].id, name: unclaimed[0].number, claimClient: true };
-    }
-    return { existingId: null, name: `${iso} - LVNs (${String(client).trim() || 'Unknown'})`, claimClient: false };
+    if (cands.length === 1 && unclaimed.length === 1) return fromNum(unclaimed[0], true);
+    return { existingId: null, name: `${iso} - LVNs (${String(client).trim() || 'Unknown'})`, claimClient: false, curBuy: null, curSell: null };
   };
 
   for (const v of vlnRows) {
@@ -324,11 +327,16 @@ async function applyVlnPlan(sb, vln, userId) {
         await sb.from('numbers').update({ client: p.client, updated_by: userId }).eq('id', p.existingId);
         parentsClaimed++;
       }
-      if (p.buy != null) await applyPriceChange(sb, p.existingId, 'purchase', p.buy, userId);
-      if (p.sell != null) await applyPriceChange(sb, p.existingId, 'selling', p.sell, userId);
+      // Only rewrite price when it actually differs (avoid redundant history).
       const patch = {};
-      if (p.buy != null) patch.purchase_price_per_mo = p.buy;
-      if (p.sell != null) patch.selling_price_per_mo = p.sell;
+      if (p.buy != null && !eqPrice(p.curBuy, p.buy)) {
+        await applyPriceChange(sb, p.existingId, 'purchase', p.buy, userId);
+        patch.purchase_price_per_mo = p.buy;
+      }
+      if (p.sell != null && !eqPrice(p.curSell, p.sell)) {
+        await applyPriceChange(sb, p.existingId, 'selling', p.sell, userId);
+        patch.selling_price_per_mo = p.sell;
+      }
       if (Object.keys(patch).length) await sb.from('numbers').update({ ...patch, updated_by: userId }).eq('id', p.existingId);
       continue;
     }
