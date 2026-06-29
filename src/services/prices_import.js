@@ -150,8 +150,10 @@ export function analyzeVln(vlnRows, nums, existingCatalog) {
 
   const parents = new Map(); // parentKey -> { key, iso, client, existingId, name, buy, sell, claimClient }
   const catalogNew = [];
+  const seenRaw = new Set(); // a master VLN listed twice must upsert once
   const skipped = [];
   let catalogUnchanged = 0;
+  let duplicates = 0;
 
   const fromNum = (n, claimClient) => ({
     existingId: n.id, name: n.number, claimClient,
@@ -169,6 +171,8 @@ export function analyzeVln(vlnRows, nums, existingCatalog) {
 
   for (const v of vlnRows) {
     if (!v.iso) { skipped.push({ raw: v.raw, reason: 'no known country calling code' }); continue; }
+    if (seenRaw.has(v.raw)) { duplicates++; continue; } // same VLN listed twice in the master
+    seenRaw.add(v.raw);
     const key = `${v.iso}|${clientKey(v.client)}`;
     if (!parents.has(key)) {
       const p = resolveParent(v.iso, v.client);
@@ -189,7 +193,7 @@ export function analyzeVln(vlnRows, nums, existingCatalog) {
     }
   }
 
-  return { parents: [...parents.values()], catalogNew, catalogUnchanged, skipped };
+  return { parents: [...parents.values()], catalogNew, catalogUnchanged, skipped, duplicates };
 }
 
 // ── parseAndAnalyze ─────────────────────────────────────────
@@ -243,6 +247,7 @@ export async function parseAndAnalyze(buffer) {
       parentsReused: vln.parents.filter((p) => p.existingId).map((p) => p.name),
       catalogNew: vln.catalogNew.length,
       catalogUnchanged: vln.catalogUnchanged,
+      duplicates: vln.duplicates,
       skipped: vln.skipped,
       // full detail for commit (parents + entries); UI reads the counts above.
       _parents: vln.parents,
