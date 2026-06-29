@@ -47,13 +47,19 @@ importRouter.post('/api/import/momessages', requireAdmin, upload.single('file'),
       const plan = await parseMoMessages(req.file.buffer);
       return res.json({ ok: true, dryRun: true, ...plan });
     }
-    // Confirmed VLN matches ride along as a JSON form field (multipart).
+    // Confirmed VLN matches + uploader-assigned numbers ride along as JSON
+    // form fields (multipart).
     let approvedVlnMatches = [];
+    let assignedReceivers = [];
     if (req.body?.approvedVlnMatches) {
       try { approvedVlnMatches = JSON.parse(req.body.approvedVlnMatches); }
       catch { return res.status(400).json({ ok: false, error: 'approvedVlnMatches must be valid JSON' }); }
     }
-    const result = await commitMoMessages(req.file.buffer, req.user.id, approvedVlnMatches);
+    if (req.body?.assignedReceivers) {
+      try { assignedReceivers = JSON.parse(req.body.assignedReceivers); }
+      catch { return res.status(400).json({ ok: false, error: 'assignedReceivers must be valid JSON' }); }
+    }
+    const result = await commitMoMessages(req.file.buffer, req.user.id, approvedVlnMatches, assignedReceivers);
     if (!result.ok) return res.status(400).json(result);
     return res.json({ ok: true, dryRun: false, ...result });
   } catch (err) {

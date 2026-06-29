@@ -474,13 +474,104 @@ async function persistApprovedVlnMatches(sb, approved, userId) {
   return rows.length;
 }
 
+// A receiver this long that carries a known calling code is treated as a VLN
+// MSISDN (joins its country group); shorter ones are standalone short codes.
+const VLN_MIN_LEN = 9;
+const isVlnParentName = (number) => /lvns?/i.test(String(number));
+const normP = (v) => { const n = Number(v); return Number.isFinite(n) && n >= 0 ? n : null; };
+
+// Assign unassigned receivers the uploader filled in (client + purchase +
+// selling). Long VLN-style numbers join their country's VLN parent (as a
+// member); short codes become standalone SC numbers. Created BEFORE the parse
+// so the normal code/member paths count their volume this import.
+async function applyAssignedReceivers(sb, assigned, userId) {
+  const list = (assigned || []).filter((a) => a && a.receiver);
+  const out = { scCreated: 0, vlnMembersAdded: 0, skipped: [] };
+  if (!list.length) return out;
+
+  const { data: nums } = await sb.from('numbers').select('id, number, client, active');
+  const numByName = new Map((nums || []).map((n) => [String(n.number), n]));
+  const lvnParents = (nums || []).filter((n) => isVlnParentName(n.number));
+  const parentCache = new Map(); // `${iso}|${clientKey}` -> id
+
+  const ensureVlnParent = async (iso, client, buy, sell) => {
+    const key = `${iso}|${clientLabel(client)}`;
+    if (parentCache.has(key)) return parentCache.get(key);
+    const cands = lvnParents.filter((n) => prefixCountryOf(n.number).toUpperCase() === iso);
+    const exact = cands.find((n) => clientLabel(n.client) === clientLabel(client));
+    let id;
+    if (exact) {
+      id = exact.id;
+    } else {
+      const name = `${iso} - LVNs (${String(client).trim() || 'Unknown'})`;
+      const existing = numByName.get(name);
+      if (existing) { id = existing.id; }
+      else {
+        const { data: created, error } = await sb.from('numbers').insert({
+          number: name, type: 'LVN', country: iso, client: String(client).trim() || null,
+          purchase_price_per_mo: buy, selling_price_per_mo: sell, active: true, updated_by: userId,
+        }).select('id').maybeSingle();
+        if (error) throw new Error(`create VLN parent ${name}: ${error.message}`);
+        id = created.id;
+        lvnParents.push({ id, number: name, client });
+        await auditLog({ userId, action: 'number.create', entity: 'number', entityId: id,
+          diff: { source: 'momessages_assign', number: name, client, purchase: buy, selling: sell } });
+      }
+    }
+    parentCache.set(key, id);
+    return id;
+  };
+
+  const memberPhones = new Set();
+  for (const a of list) {
+    const receiver = String(a.receiver).trim();
+    const digits = receiver.replace(/[^\d]/g, '');
+    const buy = normP(a.purchase), sell = normP(a.selling);
+    const client = String(a.client ?? '').trim();
+    if (!client || buy === null || sell === null) { out.skipped.push({ receiver, reason: 'client/purchase/selling required' }); continue; }
+
+    const iso = isoFromMsisdn(digits);
+    if (digits.length >= VLN_MIN_LEN && iso) {
+      const parentId = await ensureVlnParent(iso, client, buy, sell);
+      if (!memberPhones.has(digits)) {
+        const { data: ex } = await sb.from('lvn_members').select('phone').eq('phone', digits).maybeSingle();
+        if (!ex) {
+          const { error } = await sb.from('lvn_members').insert({ phone: digits, number_id: parentId, active: true, created_by: userId });
+          if (error) throw new Error(`assign member ${digits}: ${error.message}`);
+          out.vlnMembersAdded++;
+          await auditLog({ userId, action: 'lvn_member.create', entity: 'lvn_member', entityId: `${parentId}|${digits}`,
+            diff: { source: 'momessages_assign', phone: digits, number_id: parentId } });
+        }
+        memberPhones.add(digits);
+      }
+    } else {
+      // Standalone short code (country unknown from a bare code → left null).
+      if (!numByName.has(receiver)) {
+        const { data: created, error } = await sb.from('numbers').insert({
+          number: receiver, type: 'SC', country: null, client: client || null,
+          purchase_price_per_mo: buy, selling_price_per_mo: sell, active: true, updated_by: userId,
+        }).select('id').maybeSingle();
+        if (error) throw new Error(`create SC ${receiver}: ${error.message}`);
+        numByName.set(receiver, { id: created.id, number: receiver, client });
+        out.scCreated++;
+        await auditLog({ userId, action: 'number.create', entity: 'number', entityId: created.id,
+          diff: { source: 'momessages_assign', number: receiver, client, purchase: buy, selling: sell } });
+      }
+    }
+  }
+  return out;
+}
+
 // ── commitImport ────────────────────────────────────────────
-export async function commitImport(buffer, userId, approvedVlnMatches = []) {
-  // Confirmed VLN matches become members first; the parse below then resolves
-  // those receivers to their parent via the normal memberToParent path.
+export async function commitImport(buffer, userId, approvedVlnMatches = [], assignedReceivers = []) {
+  // Confirmed VLN matches + uploader-assigned numbers are created FIRST; the
+  // parse below then resolves them via the normal member/code paths.
   let vlnMembersAdded = 0;
+  let assignResult = { scCreated: 0, vlnMembersAdded: 0, skipped: [] };
   try {
-    vlnMembersAdded = await persistApprovedVlnMatches(supabase(), approvedVlnMatches, userId);
+    const sb0 = supabase();
+    vlnMembersAdded = await persistApprovedVlnMatches(sb0, approvedVlnMatches, userId);
+    assignResult = await applyAssignedReceivers(sb0, assignedReceivers, userId);
   } catch (e) {
     return { ok: false, error: e.message };
   }
@@ -497,6 +588,7 @@ export async function commitImport(buffer, userId, approvedVlnMatches = []) {
     ambiguousUnresolved: plan.ambiguousUnresolved,
     excludedObservability: plan.excludedObservability,
     vln: { ...plan.vln, membersAdded: vlnMembersAdded },
+    assigned: { scCreated: assignResult.scCreated, vlnMembersAdded: assignResult.vlnMembersAdded, skipped: assignResult.skipped },
     closedMonths: plan.closedMonths,
     errors: plan.errors,
   };
