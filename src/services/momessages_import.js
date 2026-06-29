@@ -31,6 +31,11 @@ import * as XLSX from 'xlsx';
 import { supabase } from '../supabase.js';
 import { auditLog } from '../util/audit.js';
 import { parseDate, canonHeader } from '../util/xlsx_helpers.js';
+import { isoFromMsisdn, callingCodeOf, commonSuffixLen } from '../util/calling_codes.js';
+
+// A suggested VLN match needs at least this many shared trailing digits — the
+// supplier and master agree only on the subscriber suffix (see vln_catalog).
+const VLN_SUGGEST_MIN_SUFFIX = 6;
 
 // Canonical header → field. Only Date / Receiver / Messages are
 // required; MCC-MNC is used to disambiguate shared codes.
@@ -110,6 +115,54 @@ function codeOf(number) {
 function prefixCountryOf(number) {
   const m = String(number).match(/^(.+?)\s*-\s*/);
   return m ? m[1].trim() : '';
+}
+
+// Comparable client label (so a suffix shared across clients reads as a
+// conflict). Empty/unknown collapses to '' — still one "client" bucket.
+const clientLabel = (c) => String(c ?? '').trim().toLowerCase();
+
+// ── buildVlnSuggestions ─────────────────────────────────────
+// Pure: propose a parent VLN for each unknown receiver from the catalog, by
+// country (calling code) + longest shared subscriber suffix.
+//   unknownList — [{ receiver, totalMessages, days }]
+//   catalog     — [{ country, raw_value, client, parent_number_id, buy, sell }]
+//   numById     — Map(number_id -> number string) for display (optional)
+// Returns { suggestedVlnMatches, vlnConflicts, unknownReceivers } where a suffix
+// matching >1 distinct client is a conflict (no auto-pick) and a receiver with
+// no candidate stays in unknownReceivers.
+export function buildVlnSuggestions(unknownList, catalog, numById = new Map(), minSuffix = VLN_SUGGEST_MIN_SUFFIX) {
+  const nameOf = (id) => (numById && typeof numById.get === 'function' ? numById.get(id) : null) || null;
+  const suggestedVlnMatches = [];
+  const vlnConflicts = [];
+  const stillUnknown = [];
+
+  for (const u of unknownList || []) {
+    const iso = isoFromMsisdn(u.receiver);
+    const cands = iso
+      ? (catalog || [])
+        .filter((c) => c.country === iso)
+        .map((c) => ({ c, suf: commonSuffixLen(u.receiver, c.raw_value) }))
+        .filter((x) => x.suf >= minSuffix)
+        .sort((a, b) => b.suf - a.suf)
+      : [];
+    if (!cands.length) { stillUnknown.push(u); continue; }
+    const base = { receiver: u.receiver, totalMessages: u.totalMessages, days: u.days, countryPrefix: callingCodeOf(u.receiver), iso };
+    const clients = new Set(cands.map((x) => clientLabel(x.c.client)));
+    if (clients.size > 1) {
+      vlnConflicts.push({ ...base, candidates: cands.map((x) => ({
+        parent_number_id: x.c.parent_number_id, parent_number: nameOf(x.c.parent_number_id),
+        client: x.c.client, buy: x.c.buy, sell: x.c.sell, matchedSuffix: x.suf })) });
+      continue;
+    }
+    const best = cands[0];
+    suggestedVlnMatches.push({ ...base, matchedSuffix: best.suf, candidate: {
+      parent_number_id: best.c.parent_number_id, parent_number: nameOf(best.c.parent_number_id),
+      client: best.c.client, buy: best.c.buy, sell: best.c.sell } });
+  }
+  suggestedVlnMatches.sort((a, b) => b.totalMessages - a.totalMessages);
+  vlnConflicts.sort((a, b) => b.totalMessages - a.totalMessages);
+  const unknownReceivers = stillUnknown.slice().sort((a, b) => b.totalMessages - a.totalMessages);
+  return { suggestedVlnMatches, vlnConflicts, unknownReceivers };
 }
 
 function asVolume(v) {
@@ -241,10 +294,12 @@ export async function parseAndAnalyze(buffer) {
   // ACTIVE only — a deactivated split duplicate must never make a code look
   // ambiguous or capture new volume.
   const codeIndex = new Map();
+  const numById = new Map(); // id -> number string (for VLN suggestion display)
   {
     const { data, error } = await sb.from('numbers').select('id, number, country, active').eq('active', true);
     if (error) return errPlan('Numbers lookup failed: ' + error.message, rows.length);
     for (const n of data || []) {
+      numById.set(n.id, n.number);
       const code = codeOf(n.number);
       if (!codeIndex.has(code)) codeIndex.set(code, []);
       // `country` here is the prefix from the number string, not the
@@ -252,6 +307,11 @@ export async function parseAndAnalyze(buffer) {
       codeIndex.get(code).push({ id: n.id, number: n.number, country: prefixCountryOf(n.number) });
     }
   }
+
+  // VLN catalog (from the master sheet via Sync Prices) — used to SUGGEST a
+  // parent for unknown receivers by country + shared subscriber suffix.
+  const { data: vlnCatalog } = await sb.from('vln_catalog')
+    .select('country, suffix, raw_value, client, parent_number_id, buy, sell').eq('active', true);
 
   // ── Resolve every entry to a target number_id ──
   // resolved:    key 'number_id|date' -> { number_id, label, date, volume } (rollup)
@@ -367,15 +427,18 @@ export async function parseAndAnalyze(buffer) {
     volumeOperatorsToUpsert.push({ number_id: r.number_id, date: r.date, mcc_mnc: r.mcc_mnc, volume: r.volume });
   }
 
-  const unknownReceivers = [...unknownAgg.values()]
-    .map((u) => ({ receiver: u.receiver, totalMessages: u.totalMessages, days: u.days.size }))
-    .sort((a, b) => b.totalMessages - a.totalMessages);
+  // VLN suggestions for unknown receivers (pure; see buildVlnSuggestions).
+  const unknownList = [...unknownAgg.values()].map((u) => ({ receiver: u.receiver, totalMessages: u.totalMessages, days: u.days.size }));
+  const { suggestedVlnMatches, vlnConflicts, unknownReceivers } =
+    buildVlnSuggestions(unknownList, vlnCatalog || [], numById);
   const ambiguousResolved = [...ambResolvedNote.values()].map((a) => ({ code: a.code, chosen: a.chosen, via: a.via, ignored: [...a.ignored] }));
 
   return {
     volumesToUpsert,
     volumeOperatorsToUpsert,
     unknownReceivers,
+    suggestedVlnMatches,
+    vlnConflicts,
     ambiguousResolved,
     ambiguousUnresolved,
     excludedObservability: { receivers: obsReceivers.size, messages: obsMessages },
@@ -388,18 +451,52 @@ export async function parseAndAnalyze(buffer) {
   };
 }
 
+// Persist user-confirmed VLN matches as lvn_members BEFORE the parse, so the
+// standard member-resolution path rolls their volume into the parent. Idempotent
+// on (phone): a receiver already mapped is left as-is. `approved` is
+// [{ receiver, parent_number_id }] from the import confirm step.
+async function persistApprovedVlnMatches(sb, approved, userId) {
+  const list = (approved || []).filter((a) => a && a.receiver && a.parent_number_id);
+  if (!list.length) return 0;
+  const phones = list.map((a) => String(a.receiver));
+  const { data: existing } = await sb.from('lvn_members').select('phone').in('phone', phones);
+  const have = new Set((existing || []).map((m) => String(m.phone)));
+  const rows = list
+    .filter((a) => !have.has(String(a.receiver)))
+    .map((a) => ({ phone: String(a.receiver), number_id: a.parent_number_id, active: true, created_by: userId }));
+  if (!rows.length) return 0;
+  const { error } = await sb.from('lvn_members').insert(rows);
+  if (error) throw new Error('VLN member write failed: ' + error.message);
+  for (const r of rows) {
+    await auditLog({ userId, action: 'lvn_member.create', entity: 'lvn_member', entityId: `${r.number_id}|${r.phone}`,
+      diff: { source: 'momessages_import_confirm', phone: r.phone, number_id: r.number_id } });
+  }
+  return rows.length;
+}
+
 // ── commitImport ────────────────────────────────────────────
-export async function commitImport(buffer, userId) {
+export async function commitImport(buffer, userId, approvedVlnMatches = []) {
+  // Confirmed VLN matches become members first; the parse below then resolves
+  // those receivers to their parent via the normal memberToParent path.
+  let vlnMembersAdded = 0;
+  try {
+    vlnMembersAdded = await persistApprovedVlnMatches(supabase(), approvedVlnMatches, userId);
+  } catch (e) {
+    return { ok: false, error: e.message };
+  }
+
   const plan = await parseAndAnalyze(buffer);
   const fatal = plan.errors.find((e) => e.idx === -1 && /Missing required column|lookup failed|check failed/.test(e.error));
   if (fatal) return { ok: false, error: fatal.error };
 
   const base = {
     unknownReceivers: plan.unknownReceivers,
+    suggestedVlnMatches: plan.suggestedVlnMatches,
+    vlnConflicts: plan.vlnConflicts,
     ambiguousResolved: plan.ambiguousResolved,
     ambiguousUnresolved: plan.ambiguousUnresolved,
     excludedObservability: plan.excludedObservability,
-    vln: plan.vln,
+    vln: { ...plan.vln, membersAdded: vlnMembersAdded },
     closedMonths: plan.closedMonths,
     errors: plan.errors,
   };

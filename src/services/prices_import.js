@@ -16,8 +16,14 @@
 import * as XLSX from 'xlsx';
 import { supabase } from '../supabase.js';
 import { auditLog } from '../util/audit.js';
+import { isoFromMsisdn } from '../util/calling_codes.js';
 
 const SHEET_NAME = 'MO Prices';
+
+// Subscriber-suffix length stored on a catalog entry (denormalized match hint).
+// The supplier and the master share the trailing subscriber digits; 6 covers
+// the observed VLN tails (e.g. 27840034053 / 2781160001034053 → '034053').
+const VLN_SUFFIX_LEN = 6;
 
 function pad2(n) { return String(n).padStart(2, '0'); }
 function isoOffset(days) {
@@ -45,6 +51,17 @@ function codeOf(number) {
   return (m ? m[1] : String(number)).trim();
 }
 
+// Country prefix of a DB number: "ZA - LVNs" → "ZA", "990994" → "".
+function prefixCountryOf(number) {
+  const m = String(number).match(/^(.+?)\s*-\s*/);
+  return m ? m[1].trim().toUpperCase() : '';
+}
+
+// A DB number is a VLN parent if its name carries the "LVNs" convention.
+const isVlnParent = (number) => /lvns?/i.test(String(number));
+
+const clientKey = (c) => String(c ?? '').trim().toLowerCase();
+
 const eqPrice = (a, b) => a != null && b != null && Math.abs(Number(a) - Number(b)) < 1e-9;
 
 function findCol(header, ...needles) {
@@ -70,37 +87,119 @@ function readSheet(buffer) {
   const cSell = findCol(H, 'sell', 'per message');
   const cCountry = findCol(H, 'country');
   const cSupplier = findCol(H, 'supplier');
+  const cVLN = findCol(H, 'virtual', 'long');     // "Virtual Long Number (VLN)"
+  const cClient = findCol(H, 'customer', 'using'); // "Customer Using Number"
   if (cSC < 0 || cBuy < 0 || cSell < 0) {
     return { error: `Could not find required columns (Short Code / Buy Price - Per Message / IDT Sell Price - Per Message) on the "${SHEET_NAME}" tab` };
   }
 
   const byCode = new Map();        // code -> { buy, sell, supplier, country }
   const conflictCodes = new Set(); // codes with >1 differing price row
+  const vlnRows = [];              // { raw, suffix, iso, client, buy, sell, country }
   for (let i = 1; i < aoa.length; i++) {
     const r = aoa[i];
     const code = String(r[cSC] ?? '').trim();
-    if (!/^\d+$/.test(code)) continue; // only numeric short codes
-    const rec = { buy: parsePrice(r[cBuy]), sell: parsePrice(r[cSell]), supplier: r[cSupplier], country: r[cCountry] };
-    if (rec.buy === null && rec.sell === null) continue;
-    if (byCode.has(code)) {
-      const prev = byCode.get(code);
-      if (!eqPrice(prev.buy, rec.buy) || !eqPrice(prev.sell, rec.sell)) conflictCodes.add(code);
-    } else {
-      byCode.set(code, rec);
+    const buy = parsePrice(r[cBuy]);
+    const sell = parsePrice(r[cSell]);
+
+    if (/^\d+$/.test(code) && (buy !== null || sell !== null)) {
+      const rec = { buy, sell, supplier: r[cSupplier], country: r[cCountry] };
+      if (byCode.has(code)) {
+        const prev = byCode.get(code);
+        if (!eqPrice(prev.buy, rec.buy) || !eqPrice(prev.sell, rec.sell)) conflictCodes.add(code);
+      } else {
+        byCode.set(code, rec);
+      }
+    }
+
+    // VLN rows: one cell may list several numbers (", " / " / " / " and ").
+    if (cVLN >= 0) {
+      const cell = String(r[cVLN] ?? '').trim();
+      if (cell && cell.toLowerCase() !== 'n/a') {
+        for (const tok of cell.split(/[,/]| and /i)) {
+          const raw = tok.replace(/[^\d]/g, '');
+          if (raw.length < 6) continue; // not a real MSISDN
+          vlnRows.push({
+            raw,
+            suffix: raw.slice(-VLN_SUFFIX_LEN),
+            iso: isoFromMsisdn(raw),
+            client: cClient >= 0 ? String(r[cClient] ?? '').trim() : '',
+            buy, sell,
+            country: cCountry >= 0 ? r[cCountry] : null,
+          });
+        }
+      }
     }
   }
-  return { byCode, conflictCodes };
+  return { byCode, conflictCodes, vlnRows };
+}
+
+// ── VLN catalog analysis ────────────────────────────────────
+// Group the master's VLN rows into parent VLN numbers per (country × client)
+// and a catalog entry per VLN. Resolves each group to an existing "<CC> - LVNs"
+// parent (claiming/reusing it) or plans a new "<CC> - LVNs (<client>)".
+export function analyzeVln(vlnRows, nums, existingCatalog) {
+  const lvnByIso = new Map(); // iso -> [parent number rows]
+  for (const n of nums) {
+    if (!isVlnParent(n.number)) continue;
+    const iso = prefixCountryOf(n.number);
+    if (!lvnByIso.has(iso)) lvnByIso.set(iso, []);
+    lvnByIso.get(iso).push(n);
+  }
+  const catalogByRaw = new Map((existingCatalog || []).map((c) => [c.raw_value, c]));
+
+  const parents = new Map(); // parentKey -> { key, iso, client, existingId, name, buy, sell, claimClient }
+  const catalogNew = [];
+  const skipped = [];
+  let catalogUnchanged = 0;
+
+  const resolveParent = (iso, client) => {
+    const cands = lvnByIso.get(iso) || [];
+    const exact = cands.find((n) => clientKey(n.client) === clientKey(client));
+    if (exact) return { existingId: exact.id, name: exact.number, claimClient: false };
+    const unclaimed = cands.filter((n) => !clientKey(n.client));
+    if (cands.length === 1 && unclaimed.length === 1) {
+      return { existingId: unclaimed[0].id, name: unclaimed[0].number, claimClient: true };
+    }
+    return { existingId: null, name: `${iso} - LVNs (${String(client).trim() || 'Unknown'})`, claimClient: false };
+  };
+
+  for (const v of vlnRows) {
+    if (!v.iso) { skipped.push({ raw: v.raw, reason: 'no known country calling code' }); continue; }
+    const key = `${v.iso}|${clientKey(v.client)}`;
+    if (!parents.has(key)) {
+      const p = resolveParent(v.iso, v.client);
+      parents.set(key, { key, iso: v.iso, client: String(v.client).trim(), buy: v.buy, sell: v.sell, ...p });
+    } else {
+      // First non-null price for the group wins; later rows just attach.
+      const p = parents.get(key);
+      if (p.buy == null && v.buy != null) p.buy = v.buy;
+      if (p.sell == null && v.sell != null) p.sell = v.sell;
+    }
+    const existing = catalogByRaw.get(v.raw);
+    if (existing
+      && clientKey(existing.client) === clientKey(v.client)
+      && eqPrice(existing.buy, v.buy) && eqPrice(existing.sell, v.sell)) {
+      catalogUnchanged++;
+    } else {
+      catalogNew.push({ raw: v.raw, suffix: v.suffix, iso: v.iso, client: String(v.client).trim(), parentKey: key, buy: v.buy, sell: v.sell });
+    }
+  }
+
+  return { parents: [...parents.values()], catalogNew, catalogUnchanged, skipped };
 }
 
 // ── parseAndAnalyze ─────────────────────────────────────────
 export async function parseAndAnalyze(buffer) {
   const sheet = readSheet(buffer);
   if (sheet.error) return { changes: [], unchanged: 0, conflicts: [], notInSheet: [], errors: [{ error: sheet.error }] };
-  const { byCode, conflictCodes } = sheet;
+  const { byCode, conflictCodes, vlnRows } = sheet;
 
-  const { data: nums, error } = await supabase()
-    .from('numbers').select('id, number, purchase_price_per_mo, selling_price_per_mo, active').order('number');
+  const sb0 = supabase();
+  const { data: nums, error } = await sb0
+    .from('numbers').select('id, number, client, purchase_price_per_mo, selling_price_per_mo, active').order('number');
   if (error) return { changes: [], unchanged: 0, conflicts: [], notInSheet: [], errors: [{ error: 'Numbers lookup failed: ' + error.message }] };
+  const { data: existingCatalog } = await sb0.from('vln_catalog').select('raw_value, client, buy, sell');
 
   const changes = [];
   const conflicts = [];     // mocount numbers whose sheet code is ambiguous → skipped
@@ -129,11 +228,23 @@ export async function parseAndAnalyze(buffer) {
     });
   }
 
+  const vln = analyzeVln(vlnRows || [], nums, existingCatalog || []);
+
   return {
     changes,
     unchanged,
     conflicts,
     notInSheet,
+    vln: {
+      parentsToCreate: vln.parents.filter((p) => !p.existingId).map((p) => p.name),
+      parentsReused: vln.parents.filter((p) => p.existingId).map((p) => p.name),
+      catalogNew: vln.catalogNew.length,
+      catalogUnchanged: vln.catalogUnchanged,
+      skipped: vln.skipped,
+      // full detail for commit (parents + entries); UI reads the counts above.
+      _parents: vln.parents,
+      _catalogNew: vln.catalogNew,
+    },
     effectiveFrom: todayISO(),
     errors: [],
   };
@@ -179,12 +290,69 @@ export async function commitImport(buffer, userId) {
     });
   }
 
+  // ── VLN catalog ──
+  // Create/claim parent VLN numbers, then upsert the catalog entries that map
+  // each master VLN (its subscriber suffix) to its parent + client + price.
+  const vlnResult = await applyVlnPlan(sb, plan.vln, userId);
+  if (vlnResult.error) return { ok: false, error: vlnResult.error };
+
   return {
     ok: true,
     applied,
     unchanged: plan.unchanged,
     conflicts: plan.conflicts,
     notInSheet: plan.notInSheet,
+    vln: vlnResult.summary,
     effectiveFrom: plan.effectiveFrom,
   };
+}
+
+// Apply the VLN portion of a Sync Prices commit: ensure parents exist (claim an
+// existing "<CC> - LVNs" or create "<CC> - LVNs (<client>)", update its price),
+// then upsert vln_catalog rows keyed by the master's literal VLN string.
+async function applyVlnPlan(sb, vln, userId) {
+  if (!vln || (!vln._parents?.length && !vln._catalogNew?.length)) {
+    return { summary: { parentsCreated: 0, parentsClaimed: 0, catalogUpserted: 0 } };
+  }
+  const parentId = new Map(); // parentKey -> number_id
+  let parentsCreated = 0, parentsClaimed = 0;
+
+  for (const p of vln._parents) {
+    if (p.existingId) {
+      parentId.set(p.key, p.existingId);
+      if (p.claimClient && p.client) {
+        await sb.from('numbers').update({ client: p.client, updated_by: userId }).eq('id', p.existingId);
+        parentsClaimed++;
+      }
+      if (p.buy != null) await applyPriceChange(sb, p.existingId, 'purchase', p.buy, userId);
+      if (p.sell != null) await applyPriceChange(sb, p.existingId, 'selling', p.sell, userId);
+      const patch = {};
+      if (p.buy != null) patch.purchase_price_per_mo = p.buy;
+      if (p.sell != null) patch.selling_price_per_mo = p.sell;
+      if (Object.keys(patch).length) await sb.from('numbers').update({ ...patch, updated_by: userId }).eq('id', p.existingId);
+      continue;
+    }
+    const { data: created, error } = await sb.from('numbers').insert({
+      number: p.name, type: 'LVN', country: p.iso, client: p.client || null,
+      purchase_price_per_mo: p.buy ?? 0, selling_price_per_mo: p.sell ?? 0, active: true, updated_by: userId,
+    }).select('id').maybeSingle();
+    if (error) return { error: `Create VLN parent ${p.name} failed: ${error.message}` };
+    parentId.set(p.key, created.id);
+    parentsCreated++;
+    await auditLog({ userId, action: 'number.create', entity: 'number', entityId: created.id,
+      diff: { source: 'vln_catalog_sync', number: p.name, client: p.client || null, purchase: p.buy, selling: p.sell } });
+  }
+
+  let catalogUpserted = 0;
+  const rows = (vln._catalogNew || []).map((c) => ({
+    country: c.iso, suffix: c.suffix, raw_value: c.raw, client: c.client || null,
+    parent_number_id: parentId.get(c.parentKey), buy: c.buy, sell: c.sell, active: true, updated_by: userId,
+  })).filter((r) => r.parent_number_id);
+  for (let i = 0; i < rows.length; i += 500) {
+    const { error } = await sb.from('vln_catalog').upsert(rows.slice(i, i + 500), { onConflict: 'raw_value' });
+    if (error) return { error: `VLN catalog upsert failed: ${error.message}` };
+    catalogUpserted += rows.slice(i, i + 500).length;
+  }
+
+  return { summary: { parentsCreated, parentsClaimed, catalogUpserted } };
 }

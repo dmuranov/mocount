@@ -14,6 +14,7 @@ import { useEffect, useState } from 'react';
 import { api } from '../api.js';
 import { useAuth } from '../auth.jsx';
 import ImportPanel from '../components/ImportPanel.jsx';
+import VlnConfirm from '../components/VlnConfirm.jsx';
 import NumberDrawer from '../components/NumberDrawer.jsx';
 
 function todayISO() {
@@ -258,6 +259,7 @@ export default function Dashboard() {
         onDone={() => loadAll(date)}
         endpoint="/api/import/momessages"
         title="Import MO Messages report (.xlsx) — daily volumes only"
+        renderExtra={(p, setExtra) => <VlnConfirm plan={p} setExtra={setExtra} />}
         summarize={(p) => (
           <ul className="preview-list">
             <li>Rows read: <b>{p.totalRows ?? 0}</b></li>
@@ -265,6 +267,12 @@ export default function Dashboard() {
             <li>Daily volumes to upsert: <b>{p.volumesToUpsert?.length ?? 0}</b></li>
             <li>Total messages: <b>{(p.totalMessages ?? 0).toLocaleString('en-US')}</b></li>
             <li>VLN members rolled into parents: <b>{p.vln?.membersMatched ?? 0}</b> → <b>{p.vln?.parentsTouched ?? 0}</b> parent number(s)</li>
+            {p.suggestedVlnMatches?.length > 0 && (
+              <li style={{ color: 'var(--accent)' }}>VLN matches suggested (confirm below): <b>{p.suggestedVlnMatches.length}</b></li>
+            )}
+            {p.vlnConflicts?.length > 0 && (
+              <li style={{ color: 'var(--danger-fg)' }}>VLN conflicts needing a choice: <b>{p.vlnConflicts.length}</b></li>
+            )}
             <li>Observability traffic excluded: <b>{p.excludedObservability?.receivers ?? 0}</b> code(s), <b>{(p.excludedObservability?.messages ?? 0).toLocaleString('en-US')}</b> msgs</li>
             <li>Ambiguous codes resolved by MCC: <b>{p.ambiguousResolved?.length ?? 0}</b></li>
             <li>Unknown receivers (skipped): <b>{p.unknownReceivers?.length ?? 0}</b></li>
@@ -313,6 +321,13 @@ export default function Dashboard() {
             <li>Already up to date: <b>{p.unchanged ?? 0}</b></li>
             <li>Skipped — ambiguous sheet rows: <b>{p.conflicts?.length ?? 0}</b></li>
             <li>Not in sheet (left alone): <b>{p.notInSheet?.length ?? 0}</b></li>
+            <li>VLN catalog — new/updated entries: <b>{p.vln?.catalogNew ?? 0}</b> (unchanged {p.vln?.catalogUnchanged ?? 0})</li>
+            {p.vln?.parentsToCreate?.length > 0 && (
+              <li>VLN parents to create: <b>{p.vln.parentsToCreate.length}</b> ({p.vln.parentsToCreate.join(', ')})</li>
+            )}
+            {p.vln?.skipped?.length > 0 && (
+              <li style={{ color: 'var(--danger-fg)' }}>VLN rows skipped (no known country): <b>{p.vln.skipped.length}</b></li>
+            )}
             {p.changes?.length > 0 && (
               <li>
                 <details open>

@@ -9,6 +9,9 @@
 //   endpoint  string       — POST target (.../import?dryRun=...)
 //   title     string
 //   summarize (plan) => ReactNode  — renders a one-block summary of the dry-run
+//   renderExtra (plan, setExtra) => ReactNode  — optional interactive step shown
+//       in the PREVIEW phase; call setExtra({field: value}) to attach extra
+//       multipart fields (e.g. approvedVlnMatches) to the commit POST.
 
 import { useRef, useState } from 'react';
 
@@ -17,7 +20,7 @@ const STATE_PREVIEW = 'preview';
 const STATE_COMMITTING = 'committing';
 const STATE_DONE = 'done';
 
-export default function ImportPanel({ open, onClose, onDone, endpoint, title, summarize }) {
+export default function ImportPanel({ open, onClose, onDone, endpoint, title, summarize, renderExtra }) {
   const [phase, setPhase] = useState(STATE_PICK);
   const [plan, setPlan] = useState(null);
   const [result, setResult] = useState(null);
@@ -26,6 +29,8 @@ export default function ImportPanel({ open, onClose, onDone, endpoint, title, su
   // Hold the actual File object — the <input> unmounts during the
   // PREVIEW phase, so a ref to it goes null on commit.
   const [picked, setPicked] = useState(null);
+  // Extra multipart fields contributed by renderExtra (e.g. confirmed matches).
+  const [extra, setExtra] = useState({});
   const fileRef = useRef(null);
 
   if (!open) return null;
@@ -37,6 +42,7 @@ export default function ImportPanel({ open, onClose, onDone, endpoint, title, su
     setError(null);
     setFilename('');
     setPicked(null);
+    setExtra({});
     if (fileRef.current) fileRef.current.value = '';
   }
 
@@ -66,6 +72,7 @@ export default function ImportPanel({ open, onClose, onDone, endpoint, title, su
       if (!picked) throw new Error('Lost file reference — please pick again');
       const fd = new FormData();
       fd.append('file', picked);
+      for (const [k, v] of Object.entries(extra)) fd.append(k, v);
       const res = await fetch(`${endpoint}?dryRun=false`, { method: 'POST', body: fd });
       const data = await res.json();
       if (!res.ok || data.ok === false) throw new Error(data.error || res.statusText);
@@ -99,6 +106,7 @@ export default function ImportPanel({ open, onClose, onDone, endpoint, title, su
           <div>
             <p className="mono">// {filename}</p>
             {summarize(plan)}
+            {renderExtra && renderExtra(plan, setExtra)}
             <div style={{ marginTop: 18, display: 'flex', gap: 8 }}>
               <button className="btn-primary" onClick={commit}>Confirm import</button>
               <button className="btn-ghost" onClick={reset}>Pick a different file</button>
