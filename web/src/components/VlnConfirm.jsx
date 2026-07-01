@@ -13,6 +13,7 @@ export default function VlnConfirm({ plan, setExtra }) {
   const conflicts = plan?.vlnConflicts || [];
   const unknown = plan?.unknownReceivers || [];
   const ignoredAlerts = plan?.ignoredAlerts || [];
+  const lowTrafficHidden = plan?.lowTrafficHidden || 0;
 
   // receiver -> chosen parent_number_id (null/undefined = "No, skip").
   // Suggestions default to Yes; conflicts default to unset (must choose).
@@ -47,7 +48,7 @@ export default function VlnConfirm({ plan, setExtra }) {
     return [...g.entries()];
   }, [suggestions]);
 
-  if (!suggestions.length && !conflicts.length && !unknown.length && !ignoredAlerts.length) return null;
+  if (!suggestions.length && !conflicts.length && !unknown.length && !ignoredAlerts.length && !lowTrafficHidden) return null;
 
   const setAssignField = (receiver, field, value) =>
     setAssign((p) => ({ ...p, [receiver]: { client: '', purchase: '', selling: '', ...p[receiver], [field]: value } }));
@@ -196,6 +197,12 @@ export default function VlnConfirm({ plan, setExtra }) {
             // long numbers join their country VLN group; short codes become standalone SCs. Rows left blank are skipped.
           </p>
         </details>
+      )}
+
+      {lowTrafficHidden > 0 && (
+        <p className="mono" style={{ color: 'var(--dim)', marginTop: 8 }}>
+          // {lowTrafficHidden} low-traffic unassigned number(s) hidden (under 10 msgs/day) — not prompted.
+        </p>
       )}
     </div>
   );

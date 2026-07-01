@@ -49,9 +49,20 @@ test('suggestion: no catalog candidate stays unknown', () => {
   assert.equal(unknownReceivers[0].receiver, '56228796547');
 });
 
+test('suggestion: low-traffic unassigned (<10/day) is hidden, not prompted', () => {
+  const r = buildVlnSuggestions([
+    { receiver: '55000', totalMessages: 9, days: 3 },     // 3/day → hidden
+    { receiver: '30005', totalMessages: 48, days: 18 },   // 2.7/day → hidden
+    { receiver: '77777', totalMessages: 120, days: 10 },  // 12/day → shown
+  ], [], new Map());
+  assert.equal(r.unknownReceivers.length, 1);
+  assert.equal(r.unknownReceivers[0].receiver, '77777');
+  assert.equal(r.lowTrafficHidden, 2);
+});
+
 test('suggestion: short shared suffix (<6) does not match', () => {
   const { suggestedVlnMatches, unknownReceivers } = buildVlnSuggestions(
-    [{ receiver: '2700000000053', totalMessages: 5, days: 1 }], CATALOG, NUMBYID); // shares only '053'
+    [{ receiver: '2700000000053', totalMessages: 300, days: 20 }], CATALOG, NUMBYID); // shares only '053'; 15/day so not hidden
   assert.equal(suggestedVlnMatches.length, 0);
   assert.equal(unknownReceivers.length, 1);
 });

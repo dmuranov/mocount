@@ -41,6 +41,10 @@ const VLN_SUGGEST_MIN_SUFFIX = 6;
 // probably a live number that shouldn't stay ignored — surface an alert.
 const IGNORED_ALERT_MIN_DAYS = 20;
 
+// Unassigned receivers averaging fewer than this many messages/day are noise —
+// don't prompt for a client/price at upload (they're dropped, not counted).
+const UNASSIGNED_MIN_PER_DAY = 10;
+
 // Canonical header → field. Only Date / Receiver / Messages are
 // required; MCC-MNC is used to disambiguate shared codes.
 const HEADER_ALIASES = new Map(Object.entries({
@@ -134,11 +138,12 @@ const clientLabel = (c) => String(c ?? '').trim().toLowerCase();
 // Returns { suggestedVlnMatches, vlnConflicts, unknownReceivers } where a suffix
 // matching >1 distinct client is a conflict (no auto-pick) and a receiver with
 // no candidate stays in unknownReceivers.
-export function buildVlnSuggestions(unknownList, catalog, numById = new Map(), minSuffix = VLN_SUGGEST_MIN_SUFFIX) {
+export function buildVlnSuggestions(unknownList, catalog, numById = new Map(), minSuffix = VLN_SUGGEST_MIN_SUFFIX, minPerDay = UNASSIGNED_MIN_PER_DAY) {
   const nameOf = (id) => (numById && typeof numById.get === 'function' ? numById.get(id) : null) || null;
   const suggestedVlnMatches = [];
   const vlnConflicts = [];
   const stillUnknown = [];
+  let lowTrafficHidden = 0; // unassigned receivers averaging < minPerDay/day, not prompted
 
   for (const u of unknownList || []) {
     const iso = isoFromMsisdn(u.receiver);
@@ -149,7 +154,13 @@ export function buildVlnSuggestions(unknownList, catalog, numById = new Map(), m
         .filter((x) => x.suf >= minSuffix)
         .sort((a, b) => b.suf - a.suf)
       : [];
-    if (!cands.length) { stillUnknown.push(u); continue; }
+    if (!cands.length) {
+      // Low-traffic unassigned receivers are noise — don't prompt for pricing.
+      const perDay = u.totalMessages / Math.max(Number(u.days) || 1, 1);
+      if (perDay < minPerDay) { lowTrafficHidden++; continue; }
+      stillUnknown.push(u);
+      continue;
+    }
     const base = { receiver: u.receiver, totalMessages: u.totalMessages, days: u.days, countryPrefix: callingCodeOf(u.receiver), iso };
     const clients = new Set(cands.map((x) => clientLabel(x.c.client)));
     if (clients.size > 1) {
@@ -166,7 +177,7 @@ export function buildVlnSuggestions(unknownList, catalog, numById = new Map(), m
   suggestedVlnMatches.sort((a, b) => b.totalMessages - a.totalMessages);
   vlnConflicts.sort((a, b) => b.totalMessages - a.totalMessages);
   const unknownReceivers = stillUnknown.slice().sort((a, b) => b.totalMessages - a.totalMessages);
-  return { suggestedVlnMatches, vlnConflicts, unknownReceivers };
+  return { suggestedVlnMatches, vlnConflicts, unknownReceivers, lowTrafficHidden };
 }
 
 function asVolume(v) {
@@ -445,7 +456,7 @@ export async function parseAndAnalyze(buffer) {
 
   // VLN suggestions for unknown receivers (pure; see buildVlnSuggestions).
   const unknownList = [...unknownAgg.values()].map((u) => ({ receiver: u.receiver, totalMessages: u.totalMessages, days: u.days.size }));
-  const { suggestedVlnMatches, vlnConflicts, unknownReceivers } =
+  const { suggestedVlnMatches, vlnConflicts, unknownReceivers, lowTrafficHidden } =
     buildVlnSuggestions(unknownList, vlnCatalog || [], numById);
   const ambiguousResolved = [...ambResolvedNote.values()].map((a) => ({ code: a.code, chosen: a.chosen, via: a.via, ignored: [...a.ignored] }));
 
@@ -463,6 +474,7 @@ export async function parseAndAnalyze(buffer) {
     suggestedVlnMatches,
     vlnConflicts,
     ignoredAlerts,
+    lowTrafficHidden,
     ambiguousResolved,
     ambiguousUnresolved,
     excludedObservability: { receivers: obsReceivers.size, messages: obsMessages },
@@ -609,6 +621,7 @@ export async function commitImport(buffer, userId, approvedVlnMatches = [], assi
     suggestedVlnMatches: plan.suggestedVlnMatches,
     vlnConflicts: plan.vlnConflicts,
     ignoredAlerts: plan.ignoredAlerts,
+    lowTrafficHidden: plan.lowTrafficHidden,
     ambiguousResolved: plan.ambiguousResolved,
     ambiguousUnresolved: plan.ambiguousUnresolved,
     excludedObservability: plan.excludedObservability,
