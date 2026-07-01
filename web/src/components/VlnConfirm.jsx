@@ -12,6 +12,7 @@ export default function VlnConfirm({ plan, setExtra }) {
   const suggestions = plan?.suggestedVlnMatches || [];
   const conflicts = plan?.vlnConflicts || [];
   const unknown = plan?.unknownReceivers || [];
+  const ignoredAlerts = plan?.ignoredAlerts || [];
 
   // receiver -> chosen parent_number_id (null/undefined = "No, skip").
   // Suggestions default to Yes; conflicts default to unset (must choose).
@@ -46,7 +47,7 @@ export default function VlnConfirm({ plan, setExtra }) {
     return [...g.entries()];
   }, [suggestions]);
 
-  if (!suggestions.length && !conflicts.length && !unknown.length) return null;
+  if (!suggestions.length && !conflicts.length && !unknown.length && !ignoredAlerts.length) return null;
 
   const setAssignField = (receiver, field, value) =>
     setAssign((p) => ({ ...p, [receiver]: { client: '', purchase: '', selling: '', ...p[receiver], [field]: value } }));
@@ -66,10 +67,24 @@ export default function VlnConfirm({ plan, setExtra }) {
 
   return (
     <div className="vln-confirm" style={{ marginTop: 16, borderTop: '1px solid var(--border, #333)', paddingTop: 12 }}>
-      <p className="mono" style={{ fontWeight: 700 }}>
-        VLN matches to confirm — {approvedCount} of {suggestions.length} suggestion(s) selected
-        {conflicts.length ? `, ${conflicts.length} conflict(s) need a choice` : ''}
-      </p>
+      {ignoredAlerts.length > 0 && (
+        <div className="err-box" style={{ marginBottom: 12 }}>
+          <b>⚠ {ignoredAlerts.length} ignored number(s) had sustained traffic this period</b> — on the temporary
+          ignore list but active ≥20 days. Review; if one should be counted, remove it from the ignore list and re-import.
+          <ul className="preview-list" style={{ marginTop: 6 }}>
+            {ignoredAlerts.map((a) => (
+              <li key={a.receiver} className="mono">{a.receiver} — {(Number(a.totalMessages) || 0).toLocaleString('en-US')} msgs over {a.days} day(s)</li>
+            ))}
+          </ul>
+        </div>
+      )}
+
+      {(suggestions.length > 0 || conflicts.length > 0) && (
+        <p className="mono" style={{ fontWeight: 700 }}>
+          VLN matches to confirm — {approvedCount} of {suggestions.length} suggestion(s) selected
+          {conflicts.length ? `, ${conflicts.length} conflict(s) need a choice` : ''}
+        </p>
+      )}
 
       {groups.map(([prefix, items]) => (
         <details key={prefix} open className="vln-group" style={{ marginBottom: 10 }}>

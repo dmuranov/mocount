@@ -37,6 +37,10 @@ import { isoFromMsisdn, callingCodeOf, commonSuffixLen } from '../util/calling_c
 // supplier and master agree only on the subscriber suffix (see vln_catalog).
 const VLN_SUGGEST_MIN_SUFFIX = 6;
 
+// An ignored receiver with traffic on this many distinct days in one import is
+// probably a live number that shouldn't stay ignored — surface an alert.
+const IGNORED_ALERT_MIN_DAYS = 20;
+
 // Canonical header → field. Only Date / Receiver / Messages are
 // required; MCC-MNC is used to disambiguate shared codes.
 const HEADER_ALIASES = new Map(Object.entries({
@@ -313,6 +317,12 @@ export async function parseAndAnalyze(buffer) {
   const { data: vlnCatalog } = await sb.from('vln_catalog')
     .select('country, suffix, raw_value, client, parent_number_id, buy, sell').eq('active', true);
 
+  // Temporary ignore list — receivers triaged as not-ours. Skipped silently
+  // (no unknown prompt, no counting), but sustained traffic still alerts below.
+  const { data: ignoredRows } = await sb.from('ignored_receivers').select('receiver').eq('active', true);
+  const ignoredSet = new Set((ignoredRows || []).map((r) => String(r.receiver).trim()));
+  const ignoredAgg = new Map(); // receiver -> { receiver, totalMessages, days:Set }
+
   // ── Resolve every entry to a target number_id ──
   // resolved:    key 'number_id|date' -> { number_id, label, date, volume } (rollup)
   // resolvedOps: key 'number_id|date|mcc_mnc' -> per-operator volume detail.
@@ -340,6 +350,12 @@ export async function parseAndAnalyze(buffer) {
   let vlnMembersMatched = 0;
 
   for (const e of entries) {
+    // 0. Ignore list — skip silently, but tally for the sustained-traffic alert.
+    if (ignoredSet.has(e.receiver)) {
+      if (!ignoredAgg.has(e.receiver)) ignoredAgg.set(e.receiver, { receiver: e.receiver, totalMessages: 0, days: new Set() });
+      const g = ignoredAgg.get(e.receiver); g.totalMessages += e.volume; g.days.add(e.date);
+      continue;
+    }
     // 1. VLN member → parent (rollup only; no per-operator split)
     const parent = memberToParent.get(e.receiver);
     if (parent) {
@@ -433,12 +449,20 @@ export async function parseAndAnalyze(buffer) {
     buildVlnSuggestions(unknownList, vlnCatalog || [], numById);
   const ambiguousResolved = [...ambResolvedNote.values()].map((a) => ({ code: a.code, chosen: a.chosen, via: a.via, ignored: [...a.ignored] }));
 
+  // Ignored receivers with sustained traffic this import — flag for review so a
+  // live number isn't left hidden on the temporary ignore list.
+  const ignoredAlerts = [...ignoredAgg.values()]
+    .filter((g) => g.days.size >= IGNORED_ALERT_MIN_DAYS)
+    .map((g) => ({ receiver: g.receiver, totalMessages: g.totalMessages, days: g.days.size }))
+    .sort((a, b) => b.days - a.days || b.totalMessages - a.totalMessages);
+
   return {
     volumesToUpsert,
     volumeOperatorsToUpsert,
     unknownReceivers,
     suggestedVlnMatches,
     vlnConflicts,
+    ignoredAlerts,
     ambiguousResolved,
     ambiguousUnresolved,
     excludedObservability: { receivers: obsReceivers.size, messages: obsMessages },
@@ -584,6 +608,7 @@ export async function commitImport(buffer, userId, approvedVlnMatches = [], assi
     unknownReceivers: plan.unknownReceivers,
     suggestedVlnMatches: plan.suggestedVlnMatches,
     vlnConflicts: plan.vlnConflicts,
+    ignoredAlerts: plan.ignoredAlerts,
     ambiguousResolved: plan.ambiguousResolved,
     ambiguousUnresolved: plan.ambiguousUnresolved,
     excludedObservability: plan.excludedObservability,
