@@ -62,7 +62,7 @@ export default function Dashboard() {
       for (const v of vols) if (v.date === thisDate) map.set(v.number_id, v.volume);
       setVolumes(map);
       setEdits(new Map()); // reset pending edits when the date changes
-      setCards({ day: cardData.day, mtd: cardData.mtd });
+      setCards({ day: cardData.day, mtd: cardData.mtd, byClient: cardData.byClient });
     } catch (e) {
       setError(e.message);
     }
