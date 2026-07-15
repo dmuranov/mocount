@@ -134,6 +134,31 @@ export default function Dashboard() {
         </div>
       )}
 
+      {cards && cards.byClient?.length > 0 && (
+        <div className="table-wrap" style={{ marginBottom: 24 }}>
+          <table className="data">
+            <thead>
+              <tr>
+                <th>Client</th>
+                <th style={{ textAlign: 'right' }}>MTD volume</th>
+                <th style={{ textAlign: 'right' }}>MTD revenue</th>
+                <th style={{ textAlign: 'right' }}>MTD gross profit</th>
+              </tr>
+            </thead>
+            <tbody>
+              {cards.byClient.map((c) => (
+                <tr key={c.client}>
+                  <td>{c.client}</td>
+                  <td style={{ textAlign: 'right' }} className="mono">{formatInt(c.volume)}</td>
+                  <td style={{ textAlign: 'right' }} className="mono">{formatMoney(c.sales)}</td>
+                  <td style={{ textAlign: 'right' }} className="mono">{formatMoney(c.revenue)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+
       {error && <div className="err-box" style={{ marginBottom: 14 }}>{error}</div>}
 
       <div className="table-wrap">

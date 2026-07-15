@@ -86,3 +86,23 @@ test('dashboard cards: without split, falls back to flat margin', () => {
   // s1 flat 1000*(1-0)=1000 + s2 1000*0.01=10 → 1010 (pre-operator behavior)
   assert.equal(r.day.revenue, 1010);
 });
+
+test('dashboard cards: byClient groups both split and flat numbers together', () => {
+  const r = buildDashboardCards({ numbers: NUMS, volumes: VOLS, date: '2026-04-01', split });
+  // Both s1 (split) and s2 (flat) are client 'Google'.
+  assert.equal(r.byClient.length, 1);
+  const g = r.byClient[0];
+  assert.equal(g.client, 'Google');
+  assert.equal(g.volume, 2000);
+  assert.equal(g.sales, 55.5 + 1000 * 0.03); // s1 split sales + s2 flat sales
+  assert.equal(g.revenue, 18.5); // s1 margin 8.5 + s2 margin 10
+});
+
+test('dashboard cards: numbers with no client land in "(no client)" bucket', () => {
+  const nums = [{ id: 'x1', client: null, purchase_price_per_mo: 0.01, selling_price_per_mo: 0.02, active: true }];
+  const vols = [{ number_id: 'x1', date: '2026-04-01', volume: 100 }];
+  const r = buildDashboardCards({ numbers: nums, volumes: vols, date: '2026-04-01' });
+  assert.equal(r.byClient.length, 1);
+  assert.equal(r.byClient[0].client, '(no client)');
+  assert.equal(r.byClient[0].sales, 2); // 100 * 0.02
+});

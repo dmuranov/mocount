@@ -105,34 +105,43 @@ export function buildHistoryMatrix({
   }
 
   const sections = {};
-  let grandVolume = 0, grandRevenue = 0;
+  let grandVolume = 0, grandRevenue = 0, grandSales = 0;
 
   for (const type of sectionsTypes) {
     const rows = [];
-    const sectionByDay = Object.fromEntries(days.map((d) => [d, { volume: 0, revenue: 0 }]));
-    let sectVolume = 0, sectRevenue = 0;
+    const sectionByDay = Object.fromEntries(days.map((d) => [d, { volume: 0, revenue: 0, sales: 0 }]));
+    let sectVolume = 0, sectRevenue = 0, sectSales = 0;
 
     for (const n of byType.get(type)) {
       const numSplit = split && split.splitIds.has(n.id);
       const numByDay = {};
-      let numVolume = 0, numRevenue = 0;
+      let numVolume = 0, numRevenue = 0, numSales = 0;
       for (const d of days) {
         const v = volByNumDate.get(`${n.id}|${d}`) ?? 0;
         if (v === 0) {
-          numByDay[d] = { volume: 0, revenue: 0 };
+          numByDay[d] = { volume: 0, revenue: 0, sales: 0 };
           continue;
         }
-        // Split SC: exact per-operator margin for the day; else snapshot margin.
+        // Split SC: exact per-operator figures for the day; else snapshot rates.
+        // `revenue` here is gross-profit dollars (selling − purchase) × volume;
+        // `sales` is gross billing dollars (selling × volume).
+        const dayPerf = numSplit ? split.perDay.get(`${n.id}|${d}`) : null;
         const rev = numSplit
-          ? (split.perDay.get(`${n.id}|${d}`)?.margin ?? 0)
+          ? (dayPerf?.margin ?? 0)
           : Math.round(v * margin(n.purchase_price_per_mo, n.selling_price_per_mo) * 100) / 100;
-        numByDay[d] = { volume: v, revenue: rev };
+        const sales = numSplit
+          ? (dayPerf?.sales ?? 0)
+          : Math.round(v * (Number(n.selling_price_per_mo) || 0) * 100) / 100;
+        numByDay[d] = { volume: v, revenue: rev, sales };
         numVolume += v;
         numRevenue += rev;
+        numSales += sales;
         sectionByDay[d].volume += v;
         sectionByDay[d].revenue += rev;
+        sectionByDay[d].sales += sales;
         sectVolume += v;
         sectRevenue += rev;
+        sectSales += sales;
       }
       rows.push({
         id: n.id,
@@ -144,21 +153,33 @@ export function buildHistoryMatrix({
         selling_price_per_mo: Number(n.selling_price_per_mo),
         margin_per_mo: margin(n.purchase_price_per_mo, n.selling_price_per_mo),
         byDay: numByDay,
-        totals: { volume: numVolume, revenue: Math.round(numRevenue * 100) / 100 },
+        totals: {
+          volume: numVolume,
+          revenue: Math.round(numRevenue * 100) / 100,
+          sales: Math.round(numSales * 100) / 100,
+        },
       });
     }
 
-    // Round section daily totals to 2dp on revenue (volume already int).
-    for (const d of days) sectionByDay[d].revenue = Math.round(sectionByDay[d].revenue * 100) / 100;
+    // Round section daily totals to 2dp on revenue/sales (volume already int).
+    for (const d of days) {
+      sectionByDay[d].revenue = Math.round(sectionByDay[d].revenue * 100) / 100;
+      sectionByDay[d].sales = Math.round(sectionByDay[d].sales * 100) / 100;
+    }
 
     sections[type] = {
       rows,
       byDay: sectionByDay,
-      totals: { volume: sectVolume, revenue: Math.round(sectRevenue * 100) / 100 },
+      totals: {
+        volume: sectVolume,
+        revenue: Math.round(sectRevenue * 100) / 100,
+        sales: Math.round(sectSales * 100) / 100,
+      },
     };
 
     grandVolume += sectVolume;
     grandRevenue += sectRevenue;
+    grandSales += sectSales;
   }
 
   return {
@@ -170,6 +191,10 @@ export function buildHistoryMatrix({
     days,
     filters: { client: client || null, country: k || null },
     sections,
-    grandTotal: { volume: grandVolume, revenue: Math.round(grandRevenue * 100) / 100 },
+    grandTotal: {
+      volume: grandVolume,
+      revenue: Math.round(grandRevenue * 100) / 100,
+      sales: Math.round(grandSales * 100) / 100,
+    },
   };
 }

@@ -20,9 +20,10 @@ function thisMonthYM() {
 }
 
 const METRICS = [
-  { value: 'volume',  label: 'Volume' },
-  { value: 'revenue', label: 'Revenue' },
-  { value: 'both',    label: 'Both' },
+  { value: 'volume', label: 'Volume' },
+  { value: 'sales',  label: 'Revenue' },
+  { value: 'margin', label: 'Gross Profit' },
+  { value: 'both',   label: 'Both' },
 ];
 
 function fmtInt(n) { return (Number(n) || 0).toLocaleString('en-US'); }
@@ -45,15 +46,23 @@ function compactMoney(n) {
 }
 
 function fmtCell(cell, metric) {
-  if (!cell || (!cell.volume && !cell.revenue)) return '—';
-  if (metric === 'volume')  return fmtInt(cell.volume);
-  if (metric === 'revenue') return fmtMoney(cell.revenue);
+  if (!cell || (!cell.volume && !cell.revenue && !cell.sales)) return '—';
+  if (metric === 'volume') return fmtInt(cell.volume);
+  if (metric === 'sales')  return fmtMoney(cell.sales);
+  if (metric === 'margin') return fmtMoney(cell.revenue);
   return (
     <>
       <div>{compactNum(cell.volume)}</div>
       <div className="mono" style={{ color: 'var(--dim)', fontSize: 11 }}>{compactMoney(cell.revenue)}</div>
     </>
   );
+}
+
+// Row/section/grand totals follow the selected metric; 'both' falls back to volume.
+function fmtTotal(totals, metric) {
+  if (metric === 'sales')  return fmtMoney(totals.sales);
+  if (metric === 'margin') return fmtMoney(totals.revenue);
+  return fmtInt(totals.volume);
 }
 
 export default function History() {
@@ -178,7 +187,8 @@ export default function History() {
           <div className="grand-total">
             <span className="mono" style={{ color: 'var(--muted)' }}>GRAND TOTAL — {matrix.month}</span>
             <span>Volume: <b>{fmtInt(matrix.grandTotal.volume)}</b></span>
-            <span>Revenue: <b>{fmtMoney(matrix.grandTotal.revenue)}</b></span>
+            <span>Revenue: <b>{fmtMoney(matrix.grandTotal.sales)}</b></span>
+            <span>Gross Profit: <b>{fmtMoney(matrix.grandTotal.revenue)}</b></span>
           </div>
         </>
       )}
@@ -193,7 +203,7 @@ function Section({ type, section, days, metric, collapsed, onToggle }) {
       <button className="hist-toggle" onClick={onToggle}>
         <span>{collapsed ? '▸' : '▾'} {type}</span>
         <span className="mono" style={{ color: 'var(--dim)', marginLeft: 14 }}>
-          {section.rows.length} numbers · vol {fmtInt(section.totals.volume)} · rev {fmtMoney(section.totals.revenue)}
+          {section.rows.length} numbers · vol {fmtInt(section.totals.volume)} · rev {fmtMoney(section.totals.sales)} · gp {fmtMoney(section.totals.revenue)}
         </span>
       </button>
       {!collapsed && (
@@ -222,7 +232,7 @@ function Section({ type, section, days, metric, collapsed, onToggle }) {
                     </td>
                   ))}
                   <td style={{ textAlign: 'right' }} className="mono">
-                    {metric === 'revenue' ? fmtMoney(r.totals.revenue) : fmtInt(r.totals.volume)}
+                    {fmtTotal(r.totals, metric)}
                   </td>
                 </tr>
               ))}
@@ -235,7 +245,7 @@ function Section({ type, section, days, metric, collapsed, onToggle }) {
                   </td>
                 ))}
                 <td style={{ textAlign: 'right' }} className="mono">
-                  {metric === 'revenue' ? fmtMoney(section.totals.revenue) : fmtInt(section.totals.volume)}
+                  {fmtTotal(section.totals, metric)}
                 </td>
               </tr>
             </tbody>

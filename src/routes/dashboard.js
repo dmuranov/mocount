@@ -30,7 +30,7 @@ dashboardRouter.get('/api/dashboard/cards', requireAuth, async (req, res) => {
 
     const { data: numbers, error: numErr } = await sb
       .from('numbers')
-      .select('id, purchase_price_per_mo, selling_price_per_mo, active')
+      .select('id, client, purchase_price_per_mo, selling_price_per_mo, active')
       .eq('active', true);
     if (numErr) throw new Error(numErr.message);
 

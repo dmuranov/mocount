@@ -178,12 +178,14 @@ export function buildMonthPnL({ numbers, volumes, fees, month, split = null }) {
 
 // ── Dashboard cards ─────────────────────────────────────────
 // Picked-date day totals + MTD-through-picked-date, for the four
-// dashboard cards. Split SCs take their per-day margin from
-// `split.perDay` (operator-resolved, same source as History); every
-// other number uses its flat snapshot margin. Without `split`, all
-// numbers fall back to the flat margin (pre-operator-pricing behavior).
+// dashboard cards, plus a per-client MTD breakdown (volume / gross
+// sales / gross profit) for the client list under those cards. Split
+// SCs take their per-day sales+margin from `split.perDay`
+// (operator-resolved, same source as History); every other number
+// uses its flat snapshot rate. Without `split`, all numbers fall back
+// to the flat rate (pre-operator-pricing behavior).
 //
-// `numbers` — [{ id, purchase_price_per_mo, selling_price_per_mo }]
+// `numbers` — [{ id, client, purchase_price_per_mo, selling_price_per_mo }]
 // `volumes` — daily_volumes rows from month-start → `date` (inclusive)
 // `date`    — picked date 'YYYY-MM-DD'
 // `split`   — optional { splitIds:Set, perDay:Map } from loadSplitPricing
@@ -191,27 +193,44 @@ export function buildDashboardCards({ numbers, volumes, date, split = null }) {
   const byId = new Map((numbers || []).map((n) => [n.id, n]));
   const { firstDay } = monthBounds(String(date).slice(0, 7));
   let dayVol = 0, dayRev = 0, mtdVol = 0, mtdRev = 0;
+  const clientAcc = new Map(); // client key -> { client, volume, sales, revenue }
   for (const v of volumes || []) {
     if (!v || !v.date) continue;
     if (v.date < firstDay || v.date > date) continue; // MTD through picked date
     const num = byId.get(v.number_id);
     if (!num) continue;
     const vol = Number(v.volume) || 0;
-    // Split SC: operator-resolved daily margin (matches History to the cent);
-    // others: flat snapshot margin.
-    const rev = (split && split.splitIds.has(v.number_id))
-      ? (split.perDay.get(`${v.number_id}|${v.date}`)?.margin ?? 0)
+    const isSplit = split && split.splitIds.has(v.number_id);
+    const dayPerf = isSplit ? split.perDay.get(`${v.number_id}|${v.date}`) : null;
+    // Split SC: operator-resolved daily sales/margin (matches History to the
+    // cent); others: flat snapshot rate. `revenue` here is gross profit
+    // (margin $); `sales` is gross billing.
+    const rev = isSplit
+      ? (dayPerf?.margin ?? 0)
       : vol * margin(num.purchase_price_per_mo, num.selling_price_per_mo);
+    const sales = isSplit
+      ? (dayPerf?.sales ?? 0)
+      : vol * (Number(num.selling_price_per_mo) || 0);
     mtdVol += vol;
     mtdRev += rev;
     if (v.date === date) {
       dayVol += vol;
       dayRev += rev;
     }
+    const key = (num.client || '').trim() || '(no client)';
+    const acc = clientAcc.get(key) || { client: key, volume: 0, sales: 0, revenue: 0 };
+    acc.volume += vol;
+    acc.sales += sales;
+    acc.revenue += rev;
+    clientAcc.set(key, acc);
   }
+  const byClient = [...clientAcc.values()]
+    .map((c) => ({ client: c.client, volume: c.volume, sales: r2(c.sales), revenue: r2(c.revenue) }))
+    .sort((a, b) => a.client.localeCompare(b.client));
   return {
     day: { volume: dayVol, revenue: r2(dayRev) },
     mtd: { volume: mtdVol, revenue: r2(mtdRev) },
+    byClient,
   };
 }
 

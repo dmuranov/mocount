@@ -31,6 +31,10 @@ test('past month: full month, both sections, totals', () => {
   assert.equal(r.sections.LVN.totals.revenue, 100); // 10000 * 0.01 = 100
   assert.equal(r.grandTotal.volume, 13500);
   assert.equal(r.grandTotal.revenue, 180);
+  // sales = gross billing (volume × selling_price), unlike revenue (margin $).
+  assert.equal(r.sections.SC.totals.sales, 145);   // 1000*0.04 + 2000*0.04 + 500*0.05 = 40+80+25
+  assert.equal(r.sections.LVN.totals.sales, 150);  // 10000 * 0.015
+  assert.equal(r.grandTotal.sales, 295);
 });
 
 test('current month: truncates to yesterday', () => {
@@ -111,4 +115,5 @@ test('empty days produce {volume:0, revenue:0} cells (no nulls)', () => {
   });
   assert.equal(r.sections.SC.rows[0].byDay['2026-04-15'].volume, 0);
   assert.equal(r.sections.SC.rows[0].byDay['2026-04-15'].revenue, 0);
+  assert.equal(r.sections.SC.rows[0].byDay['2026-04-15'].sales, 0);
 });
